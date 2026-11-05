@@ -1,0 +1,12 @@
+# Build
+bin/
+obj/
+artifacts/
+TestResults/
+*.user
+*.suo
+.vs/
+.idea/
+
+# Test output
+*.h264

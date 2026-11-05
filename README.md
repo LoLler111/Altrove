@@ -1,0 +1,80 @@
+# Altrove
+
+*Il tuo schermo, altrove.*
+
+Altrove proietta lo schermo del PC Windows su tablet, telefoni, TV e chiavette TV della rete di casa.
+Il PC cattura lo schermo, lo comprime in H.264 con l'encoder della scheda video e lo manda sulla rete
+locale a un'app ricevitore. Non serve Miracast e funziona anche con un PC collegato via cavo.
+
+## Stato: fase 1
+
+| Pezzo | Stato |
+|---|---|
+| Protocollo comune ([docs/PROTOCOLLO.md](docs/PROTOCOLLO.md)) | fatto |
+| App Windows: duplica uno schermo verso un ricevitore | fatto |
+| App Android: ricevitore (tablet, telefono, Fire TV con Fire OS) | fatto |
+| Schermo virtuale ed estensione (fase 2) | da fare |
+| Ricevitore web per Chromecast e TV LG webOS (fase 3) | da fare |
+| App Android come trasmettitore (fase 4) | da fare |
+| Tocco dal tablet verso il PC, audio (fase 5) | da fare |
+
+## Struttura
+
+| Cartella | Cosa contiene |
+|---|---|
+| `src/Altrove.Core` | Protocollo, ricerca mDNS dei ricevitori, sessione di trasmissione. Nessuna dipendenza da Windows. |
+| `src/Altrove.Capture` | Cattura (Windows.Graphics.Capture), conversione NV12 (GPU o CPU), encoder H.264 Media Foundation (hardware o software). |
+| `src/Altrove.App` | L'app Windows (WPF). |
+| `tools/Altrove.Cli` | Banco di prova da riga di comando, vedi sotto. |
+| `tests/Altrove.Core.Tests` | Test di protocollo, mDNS e sessione. |
+| `android/` | L'APK Android (Kotlin + Compose): per ora solo la modalità ricevitore. |
+
+## Compilare
+
+Windows (serve l'SDK .NET 10):
+
+```bash
+dotnet build Altrove.slnx
+```
+
+```bash
+dotnet test tests/Altrove.Core.Tests
+```
+
+Android (serve l'SDK Android; il JDK è quello di Android Studio):
+
+```bash
+cd android && JAVA_HOME="/c/Program Files/Android/Android Studio/jbr" ./gradlew testDebugUnitTest assembleDebug
+```
+
+L'APK di prova finisce in `android/app/build/outputs/apk/debug/app-debug.apk`.
+
+## Provare
+
+1. Installa l'APK sul tablet o sulla Fire TV e aprilo: mostra «Pronto a ricevere» e il suo indirizzo.
+2. Avvia `Altrove.exe` sul PC: il ricevitore compare da solo nell'elenco. Se non compare, scrivi
+   l'indirizzo mostrato dal ricevitore.
+3. Scegli schermo e qualità, poi premi **Trasmetti**. Un tocco sul ricevitore mostra fps e tempi di decodifica.
+
+La prima volta Windows può chiedere di permettere ad Altrove l'accesso alla rete: va consentito per le reti private.
+
+### Banco di prova (`altrove-cli`)
+
+| Comando | A cosa serve |
+|---|---|
+| `altrove-cli list` | Schermi ed encoder H.264 disponibili |
+| `altrove-cli record --seconds 5 --height 720` | Cattura e comprime per qualche secondo, salva il `.h264` e lo ridecodifica con il decoder di Windows per verificarlo; salva anche il primo fotogramma come `.bmp` |
+| `altrove-cli discover` | Elenca i ricevitori annunciati in rete |
+| `altrove-cli send 192.168.1.20` | Trasmette a un ricevitore e stampa le statistiche ogni secondo |
+| `altrove-cli fake-receiver --port 47811` | Un ricevitore finto su localhost che conta cosa arriva |
+| `altrove-cli announce --port 47811` | Fa annunciare a Windows un ricevitore di prova, per testare la ricerca |
+
+Opzioni comuni: `--fps`, `--height`, `--kbps`, `--monitor N`, `--software` (forza l'encoder software).
+
+## Limiti noti della fase 1
+
+- Solo duplicazione: l'estensione arriva con lo schermo virtuale (fase 2).
+- Niente audio.
+- Nessun abbinamento: qualunque PC della rete può trasmettere a un ricevitore aperto.
+- I contenuti protetti (Netflix e simili) risultano neri: lo impone il DRM di Windows.
+- Sui Fire TV con Vega OS (Fire TV Stick 4K Select, Fire TV Stick HD 2026) l'APK non si installa.

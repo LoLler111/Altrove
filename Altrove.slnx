@@ -1,0 +1,13 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Altrove.App/Altrove.App.csproj" />
+    <Project Path="src/Altrove.Capture/Altrove.Capture.csproj" />
+    <Project Path="src/Altrove.Core/Altrove.Core.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Altrove.Core.Tests/Altrove.Core.Tests.csproj" />
+  </Folder>
+  <Folder Name="/tools/">
+    <Project Path="tools/Altrove.Cli/Altrove.Cli.csproj" />
+  </Folder>
+</Solution>

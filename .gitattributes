@@ -1,0 +1,14 @@
+* text=auto
+
+*.cs      text diff=csharp
+*.xaml    text
+*.csproj  text
+*.slnx    text
+*.md      text
+*.kt      text
+*.gradle  text
+*.sh      text eol=lf
+
+*.png     binary
+*.ico     binary
+*.jpg     binary

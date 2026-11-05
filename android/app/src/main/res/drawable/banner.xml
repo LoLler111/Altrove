@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The 320×180 tile Android TV and Fire TV show in their app rows. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="320dp"
+    android:height="180dp"
+    android:viewportWidth="320"
+    android:viewportHeight="180">
+    <path android:fillColor="@color/background" android:pathData="M0,0 L320,0 L320,180 L0,180 Z" />
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="@color/accent"
+        android:strokeWidth="5"
+        android:pathData="M60,55 L150,55 L150,115 L60,115 Z" />
+    <path android:fillColor="@color/accent" android:pathData="M132,85 L260,85 L260,140 L132,140 Z" />
+</vector>
