@@ -73,6 +73,14 @@ public class ProtocolTests
     }
 
     [Fact]
+    public void Filler_bytes_count_only_filler_nal_units()
+    {
+        byte[] data = [0, 0, 0, 1, 0x41, 1, 2, 0, 0, 0, 1, 0x0C, 0xFF, 0xFF, 0xFF, 0x80];
+        Assert.Equal(9, H264.FillerBytes(data));
+        Assert.Equal(0, H264.FillerBytes(new byte[] { 0, 0, 0, 1, 0x65, 1 }));
+    }
+
+    [Fact]
     public void Idr_without_parameter_sets_gets_the_last_ones()
     {
         var cache = new ParameterSetCache();

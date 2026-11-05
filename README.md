@@ -68,6 +68,7 @@ La prima volta Windows può chiedere di permettere ad Altrove l'accesso alla ret
 | `altrove-cli send 192.168.1.20` | Trasmette a un ricevitore e stampa le statistiche ogni secondo |
 | `altrove-cli fake-receiver --port 47811` | Un ricevitore finto su localhost che conta cosa arriva |
 | `altrove-cli announce --port 47811` | Fa annunciare a Windows un ricevitore di prova, per testare la ricerca |
+| `altrove-cli analyze file.h264` | Conta le unità NAL per tipo e quanto del flusso è riempitivo |
 
 Opzioni comuni: `--fps`, `--height`, `--kbps`, `--monitor N`, `--software` (forza l'encoder software).
 

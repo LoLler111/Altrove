@@ -53,6 +53,8 @@ public sealed class H264Encoder : IDisposable
     private const int ProfileMain = 77;
     private const int InterlaceProgressive = 2;
     private const int RateControlCbr = 0;
+    private const int RateControlPeakConstrainedVbr = 1;
+    private static readonly Guid CodecMaxBitRate = new("9651eae4-39b9-4ebf-85ef-d7f444ec7465");
     private const int OutputProvidesSamples = 0x100, OutputCanProvideSamples = 0x200;
 
     private const int NeedMoreInput = unchecked((int)0xC00D6D72);
@@ -110,7 +112,12 @@ public sealed class H264Encoder : IDisposable
             ConfigureCodec();
             SetMediaTypes();
             if (_codecApi != IntPtr.Zero)
+            {
+                // Some encoders reset the rates when the media types are set: say them again.
                 Interop.CodecSetUInt32(_codecApi, CodecMeanBitRate, (uint)settings.BitrateKbps * 1000);
+                if (RateControl == "VBR")
+                    Interop.CodecSetUInt32(_codecApi, CodecMaxBitRate, PeakBitrate);
+            }
 
             _transform.ProcessMessage(TMessageType.MessageNotifyBeginStreaming, UIntPtr.Zero);
             _transform.ProcessMessage(TMessageType.MessageNotifyStartOfStream, UIntPtr.Zero);
@@ -124,6 +131,12 @@ public sealed class H264Encoder : IDisposable
 
     public string Name { get; }
     public bool IsHardware { get; }
+
+    /// <summary>"VBR" (peak-constrained), "CBR", or "" when the encoder exposes no rate settings.</summary>
+    public string RateControl { get; private set; } = "";
+
+    // Up to 1.5× the mean for a moment, e.g. an IDR after a still screen.
+    private uint PeakBitrate => (uint)(_settings.BitrateKbps * 1500L);
 
     /// <summary>True when the encoder takes GPU textures; otherwise frames go through system memory.</summary>
     public bool TakesTextures => IsHardware;
@@ -141,7 +154,8 @@ public sealed class H264Encoder : IDisposable
             using (activate)
                 result.Add(new EncoderCandidate(NameOf(activate, hardware), hardware, GetString(activate, HardwareVendorId)));
         }
-        return result;
+        // The AMD driver registers its encoder twice; one line is enough.
+        return result.Distinct().ToList();
     }
 
     /// <summary>
@@ -265,7 +279,19 @@ public sealed class H264Encoder : IDisposable
         if (_codecApi == IntPtr.Zero)
             return;
         // Each is best effort: encoders accept different subsets, and the defaults still work.
-        Interop.CodecSetUInt32(_codecApi, CodecRateControlMode, RateControlCbr);
+        // Peak-constrained VBR, not CBR: in CBR the AMD encoder pads every frame with filler data to hold
+        // the rate (29% of the stream in the first test on the RX 6750 XT), bandwidth that carries nothing.
+        // The peak keeps keyframes from flooding the network; encoders that refuse it fall back to CBR.
+        if (Interop.CodecSetUInt32(_codecApi, CodecRateControlMode, RateControlPeakConstrainedVbr) >= 0)
+        {
+            RateControl = "VBR";
+            Interop.CodecSetUInt32(_codecApi, CodecMaxBitRate, PeakBitrate);
+        }
+        else
+        {
+            Interop.CodecSetUInt32(_codecApi, CodecRateControlMode, RateControlCbr);
+            RateControl = "CBR";
+        }
         Interop.CodecSetUInt32(_codecApi, CodecMeanBitRate, (uint)_settings.BitrateKbps * 1000);
         Interop.CodecSetBool(_codecApi, CodecLowLatencyMode, true);
         Interop.CodecSetUInt32(_codecApi, CodecBPictureCount, 0);

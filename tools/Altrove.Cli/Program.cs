@@ -31,6 +31,7 @@ try
         "send" => await Send(options),
         "fake-receiver" => await FakeReceiver(options),
         "announce" => await Announce(options),
+        "analyze" => Analyze(options),
         _ => Usage(),
     };
 }
@@ -102,6 +103,9 @@ static async Task<int> Record(Options options)
         copy = frames.ToArray();
     Console.WriteLine($"Primo fotogramma dopo {firstAt} ms; fotogrammi: {copy.Length}, IDR: {copy.Count(f => f.IsKeyframe)}, " +
         $"dimensione: {copy.Sum(f => f.Data.Length) / 1024} KiB");
+    var total = copy.Sum(f => (long)f.Data.Length);
+    var filler = copy.Sum(f => (long)Altrove.Core.Video.H264.FillerBytes(f.Data));
+    Console.WriteLine($"Bitrate medio {total * 8.0 / options.Seconds / 1e6:0.0} Mbit/s; riempitivo {filler / 1024} KiB ({(total > 0 ? filler * 100.0 / total : 0):0}%)");
     if (copy.Length == 0)
         return 1;
 
@@ -117,6 +121,20 @@ static async Task<int> Record(Options options)
     Console.WriteLine($"Primo fotogramma decodificato: {snapshot}");
     Console.WriteLine($"Verifica con {verify.Decoder}: decodificati {verify.FramesDecoded}/{verify.FramesIn}, {verify.Width}×{verify.Height}");
     return verify.FramesDecoded > 0 && verify.Width == width ? 0 : 1;
+}
+
+// What a saved .h264 contains: NAL units by type and how much of it is filler.
+static int Analyze(Options options)
+{
+    var data = File.ReadAllBytes(options.Positional ?? options.Out);
+    var counts = Altrove.Core.Video.H264.NalUnits(data)
+        .GroupBy(n => Altrove.Core.Video.H264.NalType(n.Span))
+        .OrderBy(g => g.Key)
+        .Select(g => $"{g.Key}={g.Count()}");
+    var filler = Altrove.Core.Video.H264.FillerBytes(data);
+    Console.WriteLine($"{data.Length / 1024} KiB; NAL per tipo: {string.Join(", ", counts)}");
+    Console.WriteLine($"Riempitivo: {filler / 1024} KiB ({filler * 100.0 / data.Length:0}%)");
+    return 0;
 }
 
 static async Task<int> Discover(Options options)

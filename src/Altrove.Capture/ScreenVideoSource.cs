@@ -28,7 +28,8 @@ public sealed class ScreenVideoSource : IEncodedVideoSource
 
     public (int Width, int Height) SourceSize => _capture is { } c ? (c.Width, c.Height) : (_monitor.Width, _monitor.Height);
 
-    public string EncoderName => _encoder is null ? "" : $"{_encoder.Name}, conversione {_converter?.Name}, {_device?.AdapterName}";
+    public string EncoderName => _encoder is null ? ""
+        : $"{_encoder.Name}{(_encoder.RateControl.Length > 0 ? " " + _encoder.RateControl : "")}, conversione {_converter?.Name}, {_device?.AdapterName}";
 
     public event Action<EncodedFrame>? FrameEncoded;
     public event Action<Exception>? Failed;

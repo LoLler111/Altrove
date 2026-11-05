@@ -26,7 +26,13 @@ public static class H264
         }
     }
 
+    public const int NalFiller = 12;
+
     public static int NalType(ReadOnlySpan<byte> nal) => nal.IsEmpty ? -1 : nal[0] & 0x1F;
+
+    /// <summary>Bytes spent on filler data: padding a CBR encoder adds, worth nothing to the picture.</summary>
+    public static int FillerBytes(ReadOnlyMemory<byte> annexB) =>
+        NalUnits(annexB).Where(n => NalType(n.Span) == NalFiller).Sum(n => n.Length + 4);
 
     public static (bool HasIdr, bool HasParameterSets) Describe(ReadOnlyMemory<byte> annexB)
     {
