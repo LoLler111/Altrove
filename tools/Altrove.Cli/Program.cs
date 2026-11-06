@@ -60,6 +60,8 @@ static async Task<int> Touch(Options options, bool hold)
     var monitor = PickMonitor(options);
     var xy = (options.Positional ?? "0.5,0.5").Split(',').Select(v => double.Parse(v, System.Globalization.CultureInfo.InvariantCulture)).ToArray();
     using var touch = new Altrove.Capture.Input.TouchInjector(monitor);
+    var origin = Altrove.Capture.Input.TouchInjector.VirtualScreenOrigin;
+    Console.WriteLine($"Schermo a {monitor.Left},{monitor.Top} ({monitor.Width}×{monitor.Height}); il desktop inizia a {origin.X},{origin.Y}");
     Console.WriteLine($"Tocco su {monitor.DisplayName} a x {xy[0]:0.###}, y {xy[1]:0.###}" + (hold ? $" per {options.Seconds} s" : ""));
     touch.Inject(new TouchMessage([new TouchPointer(0, xy[0], xy[1], TouchStates.Down)]));
     await Task.Delay(TimeSpan.FromSeconds(hold ? Math.Max(options.Seconds, 0) : 0) + TimeSpan.FromMilliseconds(60));

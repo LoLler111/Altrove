@@ -34,6 +34,9 @@ public sealed class TouchInjector : IDisposable
         _keepAlive = new Timer(_ => KeepAlive(), null, KeepAliveInterval, KeepAliveInterval);
     }
 
+    /// <summary>Top-left corner of the virtual screen, where synthetic pointer coordinates start.</summary>
+    public static (int X, int Y) VirtualScreenOrigin => (GetSystemMetrics(VirtualScreenLeft), GetSystemMetrics(VirtualScreenTop));
+
     /// <summary>Injections Windows refused, e.g. into an elevated window.</summary>
     public int Failures { get; private set; }
 
@@ -155,8 +158,13 @@ public sealed class TouchInjector : IDisposable
     private PointerTypeInfo Contact(uint contact, double x, double y, uint flags)
     {
         var (left, top, width, height) = _target;
-        var px = left + (int)Math.Round(Math.Clamp(x, 0, 1) * (width - 1));
-        var py = top + (int)Math.Round(Math.Clamp(y, 0, 1) * (height - 1));
+        // Synthetic pointers are placed from the top-left corner of the virtual screen (all monitors together),
+        // not from the primary monitor's origin: with a monitor left of or above the primary they differ.
+        // Asked each time, because attaching the virtual monitor can move that corner.
+        var originX = GetSystemMetrics(VirtualScreenLeft);
+        var originY = GetSystemMetrics(VirtualScreenTop);
+        var px = left - originX + (int)Math.Round(Math.Clamp(x, 0, 1) * (width - 1));
+        var py = top - originY + (int)Math.Round(Math.Clamp(y, 0, 1) * (height - 1));
         var info = new PointerTypeInfo { Type = PointerTypeTouch };
         info.TouchInfo.PointerInfo.PointerType = PointerTypeTouch;
         info.TouchInfo.PointerInfo.PointerId = contact;
@@ -273,4 +281,10 @@ public sealed class TouchInjector : IDisposable
 
     [DllImport("user32.dll")]
     private static extern void DestroySyntheticPointerDevice(IntPtr device);
+
+    private const int VirtualScreenLeft = 76; // SM_XVIRTUALSCREEN
+    private const int VirtualScreenTop = 77;  // SM_YVIRTUALSCREEN
+
+    [DllImport("user32.dll")]
+    private static extern int GetSystemMetrics(int index);
 }
