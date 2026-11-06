@@ -1,4 +1,4 @@
-package io.github.loller111.altrove.ui
+package com.altrove.app.ui
 
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme

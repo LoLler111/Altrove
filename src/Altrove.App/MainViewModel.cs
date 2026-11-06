@@ -89,6 +89,61 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
 
         _browser.Changed += found => Application.Current?.Dispatcher.BeginInvoke(() => Merge(found));
         _browser.Start();
+        _ = CheckForUpdatesInBackgroundAsync();
+    }
+
+    // ---- Updates (Velopack, from the GitHub releases) ----
+
+    private readonly UpdateService _updates = new();
+    private bool _restartAfterUpdate;
+
+    /// <summary>The window closes so the updater can replace the app and start it again.</summary>
+    public event EventHandler? UpdateRestartRequested;
+
+    public string AppVersion => $"versione {UpdateService.CurrentVersion}";
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(IsUpdateReady), nameof(UpdateLabel))]
+    private string? _updateReadyVersion;
+
+    public bool IsUpdateReady => UpdateReadyVersion is not null;
+    public string UpdateLabel => $"Aggiorna alla {UpdateReadyVersion}";
+
+    /// <summary>Quietly downloads a newer release after start-up; offline or GitHub busy: nothing happens.</summary>
+    private async Task CheckForUpdatesInBackgroundAsync()
+    {
+        try
+        {
+            var version = await _updates.DownloadLatestAsync();
+            Application.Current?.Dispatcher.BeginInvoke(() => UpdateReadyVersion = version);
+        }
+        catch (Exception ex)
+        {
+            App.Log($"Controllo aggiornamenti non riuscito: {ex.Message}");
+        }
+    }
+
+    [RelayCommand]
+    private void RestartToUpdate()
+    {
+        if (!IsUpdateReady)
+            return;
+        _restartAfterUpdate = true;
+        UpdateRestartRequested?.Invoke(this, EventArgs.Empty);
+    }
+
+    /// <summary>On exit, after the receiver got its goodbye: the updater takes over once this process is gone.</summary>
+    private void ApplyDownloadedUpdate()
+    {
+        try
+        {
+            _updates.ApplyAfterExit(_restartAfterUpdate);
+        }
+        catch (Exception ex)
+        {
+            // Velopack applies a downloaded package at the next start anyway.
+            App.Log($"Aggiornamento non avviato: {ex.Message}");
+        }
     }
 
     public ObservableCollection<ReceiverItem> Receivers { get; } = [];
@@ -599,6 +654,7 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
     {
         _browser.Dispose();
         await StopAsync(null);
+        ApplyDownloadedUpdate();
     }
 }
 

@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Debug builds only: lets the in-app update be tried against a release served over plain HTTP from the PC
+     (the emulator sees it at 10.0.2.2), with -PupdateUrl=http://10.0.2.2:8765/latest.json. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application android:networkSecurityConfig="@xml/debug_network" />
+</manifest>

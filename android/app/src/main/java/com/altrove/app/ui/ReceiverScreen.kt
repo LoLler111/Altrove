@@ -1,4 +1,4 @@
-package io.github.loller111.altrove.ui
+package com.altrove.app.ui
 
 import android.annotation.SuppressLint
 import android.view.MotionEvent
@@ -6,6 +6,8 @@ import android.view.SurfaceHolder
 import android.view.SurfaceView
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -41,21 +43,22 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
-import io.github.loller111.altrove.receiver.ReceiverController
-import io.github.loller111.altrove.receiver.ReceiverState
-import io.github.loller111.altrove.receiver.TouchMapper
+import com.altrove.app.receiver.ReceiverController
+import com.altrove.app.receiver.ReceiverState
+import com.altrove.app.receiver.TouchMapper
+import com.altrove.app.update.UpdateController
 
 @Composable
-fun ReceiverScreen(receiver: ReceiverController) {
+fun ReceiverScreen(receiver: ReceiverController, updates: UpdateController) {
     val state by receiver.state.collectAsState()
     when (val s = state) {
         is ReceiverState.Streaming -> VideoScreen(receiver, s)
-        else -> WaitingScreen(s)
+        else -> WaitingScreen(s, updates)
     }
 }
 
 @Composable
-private fun WaitingScreen(state: ReceiverState) {
+private fun WaitingScreen(state: ReceiverState, updates: UpdateController) {
     Box(
         Modifier
             .fillMaxSize()
@@ -65,10 +68,13 @@ private fun WaitingScreen(state: ReceiverState) {
         contentAlignment = Alignment.Center,
     ) {
         Column(
-            Modifier.widthIn(max = 560.dp),
+            Modifier
+                .widthIn(max = 640.dp)
+                .verticalScroll(rememberScrollState()),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
+            UpdateBanner(updates)
             Text("Altrove", fontSize = 40.sp, fontWeight = FontWeight.SemiBold, color = AltroveColors.Text)
             Text("Il tuo schermo, altrove.", fontSize = 16.sp, color = AltroveColors.TextDim)
             Spacer(Modifier.height(16.dp))
@@ -85,7 +91,7 @@ private fun WaitingScreen(state: ReceiverState) {
                         Spacer(Modifier.height(8.dp))
                         Text("Se non compare, aggiungi a mano:", color = AltroveColors.TextDim, fontSize = 14.sp)
                         state.addresses.forEach { address ->
-                            val shown = if (state.port == io.github.loller111.altrove.protocol.AltroveProtocol.DEFAULT_PORT) address else "$address:${state.port}"
+                            val shown = if (state.port == com.altrove.app.protocol.AltroveProtocol.DEFAULT_PORT) address else "$address:${state.port}"
                             Text(
                                 shown,
                                 modifier = Modifier

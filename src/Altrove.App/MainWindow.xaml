@@ -31,10 +31,19 @@
             <ColumnDefinition Width="6*" />
         </Grid.ColumnDefinitions>
 
-        <StackPanel Grid.ColumnSpan="3" Margin="2,0,0,16">
-            <TextBlock Text="Altrove" FontSize="26" FontWeight="SemiBold" />
-            <TextBlock Text="Il tuo schermo, altrove." Foreground="{StaticResource TextDimBrush}" />
-        </StackPanel>
+        <DockPanel Grid.ColumnSpan="3" Margin="2,0,0,16">
+            <StackPanel DockPanel.Dock="Right" VerticalAlignment="Center" HorizontalAlignment="Right">
+                <Button Style="{StaticResource AccentButton}" Content="{Binding UpdateLabel}" Command="{Binding RestartToUpdateCommand}"
+                        Visibility="{Binding IsUpdateReady, Converter={StaticResource Visible}}"
+                        ToolTip="Chiude Altrove, installa la nuova versione e la riapre. Altrimenti si installa da sola alla chiusura." />
+                <TextBlock Text="{Binding AppVersion}" Foreground="{StaticResource TextDimBrush}" FontSize="11.5"
+                           HorizontalAlignment="Right" Margin="0,4,2,0" />
+            </StackPanel>
+            <StackPanel>
+                <TextBlock Text="Altrove" FontSize="26" FontWeight="SemiBold" />
+                <TextBlock Text="Il tuo schermo, altrove." Foreground="{StaticResource TextDimBrush}" />
+            </StackPanel>
+        </DockPanel>
 
         <!-- Receivers -->
         <Border Grid.Row="1" Grid.Column="0" Style="{StaticResource Card}" Margin="0">

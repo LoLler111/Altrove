@@ -1,10 +1,10 @@
-package io.github.loller111.altrove.receiver
+package com.altrove.app.receiver
 
 import android.content.Context
 import android.net.nsd.NsdManager
 import android.net.nsd.NsdServiceInfo
 import android.util.Log
-import io.github.loller111.altrove.protocol.AltroveProtocol
+import com.altrove.app.protocol.AltroveProtocol
 
 /** Announces this receiver as _altrove._tcp so the Windows app lists it by itself. */
 class Advertiser(context: Context) {

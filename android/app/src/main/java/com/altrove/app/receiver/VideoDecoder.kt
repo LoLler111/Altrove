@@ -1,4 +1,4 @@
-package io.github.loller111.altrove.receiver
+package com.altrove.app.receiver
 
 import android.media.MediaCodec
 import android.media.MediaCodecInfo
@@ -8,8 +8,8 @@ import android.os.Build
 import android.os.SystemClock
 import android.util.Log
 import android.view.Surface
-import io.github.loller111.altrove.protocol.H264
-import io.github.loller111.altrove.protocol.VideoPacket
+import com.altrove.app.protocol.H264
+import com.altrove.app.protocol.VideoPacket
 import java.util.concurrent.LinkedBlockingDeque
 import java.util.concurrent.TimeUnit
 

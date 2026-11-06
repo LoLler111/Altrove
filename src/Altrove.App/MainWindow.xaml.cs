@@ -14,6 +14,7 @@ public partial class MainWindow : Window
     {
         InitializeComponent();
         DataContext = _model;
+        _model.UpdateRestartRequested += (_, _) => Close();
         SourceInitialized += (_, _) => UseDarkTitleBar();
     }
 

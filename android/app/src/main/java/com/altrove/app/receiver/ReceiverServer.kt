@@ -1,10 +1,10 @@
-package io.github.loller111.altrove.receiver
+package com.altrove.app.receiver
 
 import android.util.Log
-import io.github.loller111.altrove.protocol.Bye
-import io.github.loller111.altrove.protocol.ControlMessage
-import io.github.loller111.altrove.protocol.Messages
-import io.github.loller111.altrove.protocol.VideoPacket
+import com.altrove.app.protocol.Bye
+import com.altrove.app.protocol.ControlMessage
+import com.altrove.app.protocol.Messages
+import com.altrove.app.protocol.VideoPacket
 import org.java_websocket.WebSocket
 import org.java_websocket.handshake.ClientHandshake
 import org.java_websocket.server.WebSocketServer

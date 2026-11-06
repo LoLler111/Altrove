@@ -1,4 +1,4 @@
-package io.github.loller111.altrove.protocol
+package com.altrove.app.protocol
 
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable

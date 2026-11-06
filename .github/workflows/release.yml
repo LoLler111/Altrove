@@ -1,0 +1,89 @@
+# Pushing a tag like v1.2.3 builds the Windows app and the Android APK, runs the tests and
+# publishes the GitHub release both apps update from. The tag must match version.txt.
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    env:
+      DOTNET_NOLOGO: '1'
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Tag e version.txt coincidono
+        shell: pwsh
+        run: |
+          $version = (Get-Content version.txt -Raw).Trim()
+          if ("v$version" -ne $env:GITHUB_REF_NAME) { throw "Il tag $env:GITHUB_REF_NAME non corrisponde a version.txt ($version)." }
+          "VERSION=$version" >> $env:GITHUB_ENV
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      # Downloads cached by the Test workflow on main (a tag can read main's caches, not write
+      # ones the next tag could use): restore only.
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          cache-read-only: true
+
+      - name: NuGet dalla cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.nuget/packages
+          key: nuget-${{ hashFiles('**/*.csproj') }}
+          restore-keys: nuget-
+
+      - name: Chiave di firma Android
+        shell: pwsh
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        run: |
+          if (-not $env:KEYSTORE_BASE64) { throw 'Manca il secret ANDROID_KEYSTORE_BASE64: senza la stessa chiave l''APK non aggiorna quello installato.' }
+          $keystore = Join-Path $env:RUNNER_TEMP 'release.jks'
+          [IO.File]::WriteAllBytes($keystore, [Convert]::FromBase64String($env:KEYSTORE_BASE64))
+          "ALTROVE_KEYSTORE=$keystore" >> $env:GITHUB_ENV
+
+      - name: Test Windows
+        shell: pwsh
+        run: dotnet test tests/Altrove.Core.Tests -c Release
+
+      - name: Test Android
+        shell: pwsh
+        run: android/gradlew.bat -p android testDebugUnitTest --console=plain
+
+      - name: Pacchetti
+        shell: pwsh
+        env:
+          ALTROVE_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ALTROVE_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ALTROVE_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          dotnet tool install -g vpk --version 1.2.161
+          ./publish.ps1 -DownloadPrevious
+
+      - name: Release su GitHub
+        shell: pwsh
+        # vpk uploads only this version's Windows files (assets.win.json), not the previous package
+        # downloaded for the delta. The release stays a draft until the APK is there too, so the
+        # tablet never sees a "latest" release without it.
+        run: |
+          vpk upload github --outputDir artifacts/releases --repoUrl "https://github.com/$env:GITHUB_REPOSITORY" `
+            --token $env:GITHUB_TOKEN --tag $env:GITHUB_REF_NAME --releaseName "Altrove $env:VERSION"
+          if ($LASTEXITCODE -ne 0) { throw 'vpk upload failed.' }
+          gh release upload $env:GITHUB_REF_NAME artifacts/releases/Altrove-android.apk
+          gh release edit $env:GITHUB_REF_NAME --draft=false --latest

@@ -1,0 +1,48 @@
+# Every push to main runs the same tests as a release and keeps the downloads (Gradle, NuGet) in
+# the cache. Caches saved on main are the only ones a tag can read, so this is what lets the
+# Release workflow skip most of its downloads.
+name: Test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: windows-latest
+    env:
+      DOTNET_NOLOGO: '1'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Cache NuGet
+        uses: actions/cache@v4
+        with:
+          path: ~/.nuget/packages
+          key: nuget-${{ hashFiles('**/*.csproj') }}
+          restore-keys: nuget-
+
+      - name: Test Windows
+        shell: pwsh
+        run: dotnet test tests/Altrove.Core.Tests -c Release
+
+      - name: Compilazione Windows
+        shell: pwsh
+        run: dotnet build Altrove.slnx -c Release
+
+      - name: Test Android
+        shell: pwsh
+        run: android/gradlew.bat -p android testDebugUnitTest --console=plain

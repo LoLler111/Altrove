@@ -30,6 +30,37 @@ locale a un'app ricevitore. Non serve Miracast e funziona anche con un PC colleg
 | `tests/Altrove.Core.Tests` | Test di protocollo, mDNS e sessione. |
 | `android/` | L'APK Android (Kotlin + Compose): per ora solo la modalità ricevitore. |
 
+## Installare
+
+Dalla pagina [Releases](https://github.com/LoLler111/Altrove/releases/latest):
+
+- **Windows**: `Altrove-win-Setup.exe` (oppure `Altrove-win-Portable.zip` da scompattare dove vuoi). Windows può
+  avvisare che l'editore è sconosciuto: «Ulteriori informazioni» → «Esegui comunque».
+- **Android** (tablet, telefono, Fire TV): `Altrove-android.apk`. Serve consentire l'installazione da origini sconosciute.
+
+Poi le app **si aggiornano da sole** dalle stesse release:
+
+- Windows controlla all'avvio, scarica in silenzio e installa alla chiusura; il pulsante «Aggiorna alla …» in alto
+  lo fa subito (Altrove si chiude e si riapre).
+- Android, nella schermata d'attesa, mostra «È disponibile Altrove …»: «Aggiorna» scarica l'APK e Android chiede di
+  confermare l'installazione (la prima volta anche il permesso di installare app).
+
+## Pubblicare una versione
+
+1. Cambia `version.txt` (es. `0.3.0`), fai il commit e caricalo su GitHub.
+2. Crea e carica il tag con lo stesso numero:
+
+```bash
+git tag v0.3.0 && git push origin v0.3.0
+```
+
+Il workflow `Release` esegue i test, costruisce installer, pacchetti di aggiornamento e APK firmato e pubblica la
+release. In locale `./publish.ps1` produce gli stessi file in `artifacts/releases`.
+
+L'APK va firmato sempre con la stessa chiave, altrimenti Android rifiuta l'aggiornamento: è in
+`%USERPROFILE%\.altrove` (mai nel repository; conservane una copia) e su GitHub nei secret
+`ANDROID_KEYSTORE_BASE64`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS`, `ANDROID_KEY_PASSWORD`.
+
 ## Compilare
 
 Windows (serve l'SDK .NET 10):

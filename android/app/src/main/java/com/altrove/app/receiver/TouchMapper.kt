@@ -1,9 +1,9 @@
-package io.github.loller111.altrove.receiver
+package com.altrove.app.receiver
 
 import android.view.MotionEvent
-import io.github.loller111.altrove.protocol.Touch
-import io.github.loller111.altrove.protocol.TouchPointer
-import io.github.loller111.altrove.protocol.TouchStates
+import com.altrove.app.protocol.Touch
+import com.altrove.app.protocol.TouchPointer
+import com.altrove.app.protocol.TouchStates
 import kotlin.math.roundToLong
 
 /** Turns Android touch events on the video into protocol touch messages (docs/PROTOCOLLO.md, "touch"). */

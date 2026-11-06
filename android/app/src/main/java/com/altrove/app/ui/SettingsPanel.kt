@@ -1,4 +1,4 @@
-package io.github.loller111.altrove.ui
+package com.altrove.app.ui
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -32,11 +32,11 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import io.github.loller111.altrove.protocol.Configure
-import io.github.loller111.altrove.protocol.Features
-import io.github.loller111.altrove.protocol.StreamModes
-import io.github.loller111.altrove.receiver.ReceiverController
-import io.github.loller111.altrove.receiver.ReceiverState
+import com.altrove.app.protocol.Configure
+import com.altrove.app.protocol.Features
+import com.altrove.app.protocol.StreamModes
+import com.altrove.app.receiver.ReceiverController
+import com.altrove.app.receiver.ReceiverState
 
 /**
  * The panel over the video: what is streaming, and the PC's choices (mode, screen, resolution, fluidity,

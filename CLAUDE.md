@@ -21,6 +21,16 @@ Testi per l'utente in italiano, commenti e nomi nel codice in inglese (come in S
   impostazioni: `MainViewModel.ConfigureAsync` → `StartStreamAsync` → `SenderSession.SwitchSourceAsync`, stessa connessione).
 - `ScreenVideoSource`: il fotogramma in conversione e lo smontaggio sono esclusivi (`_frameLock`).
 
+## Rilasci e aggiornamenti
+- Repository pubblico `LoLler111/Altrove`; un tag `vX.Y.Z` uguale a `version.txt` fa partire `.github/workflows/release.yml`
+  (`publish.ps1` + `vpk upload github`, APK aggiunto prima di togliere la bozza). Schema copiato da SoundBoardKing.
+- Windows: Velopack (`Program.Main` → `VelopackApp.Build().Run()`, `UpdateService`). Si aggiorna solo se installato
+  con Setup.exe o dallo zip Portable. Prova locale: `ALTROVE_UPDATE_SOURCE=<cartella di artifacts\releases>`.
+- Android: pacchetto `com.altrove.app` (definitivo). `update/UpdateController` legge `releases/latest` di GitHub,
+  scarica l'APK e apre l'installer. Chiave in `~/.altrove` (o variabili `ALTROVE_KEYSTORE*` in CI): senza, l'APK di
+  release esce firmato debug e non aggiorna quello pubblicato. Prova locale: build debug con
+  `-PupdateUrl=http://10.0.2.2:8765/latest.json` (HTTP in chiaro permesso solo in `src/debug`).
+
 ## Test
 - `dotnet test tests/Altrove.Core.Tests`; Android: `./gradlew testDebugUnitTest` (JDK di Android Studio).
 - `tools/Altrove.Cli` prova cattura ed encoder senza interfaccia: `record` ridecodifica con il decoder di Windows e salva un fotogramma.

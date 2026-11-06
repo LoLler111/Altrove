@@ -1,4 +1,4 @@
-package io.github.loller111.altrove
+package com.altrove.app
 
 import android.os.Build
 import android.os.Bundle
@@ -11,23 +11,27 @@ import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.lifecycleScope
-import io.github.loller111.altrove.protocol.DisplayInfo
-import io.github.loller111.altrove.receiver.ReceiverController
-import io.github.loller111.altrove.receiver.ReceiverState
-import io.github.loller111.altrove.ui.AltroveTheme
-import io.github.loller111.altrove.ui.ReceiverScreen
+import com.altrove.app.protocol.DisplayInfo
+import com.altrove.app.receiver.ReceiverController
+import com.altrove.app.receiver.ReceiverState
+import com.altrove.app.ui.AltroveTheme
+import com.altrove.app.ui.ReceiverScreen
+import com.altrove.app.update.UpdateController
+import com.altrove.app.update.UpdateState
 import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
     private lateinit var receiver: ReceiverController
+    private lateinit var updates: UpdateController
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         receiver = ReceiverController(applicationContext)
+        updates = UpdateController(applicationContext)
         setContent {
             AltroveTheme {
-                ReceiverScreen(receiver)
+                ReceiverScreen(receiver, updates)
             }
         }
         // While a picture is on screen: no sleeping, no system bars over it.
@@ -50,6 +54,13 @@ class MainActivity : ComponentActivity() {
     override fun onStart() {
         super.onStart()
         receiver.start(displayInfo())
+        updates.checkOnce()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        // Back from the page that allows installing apps: carry on with the downloaded update.
+        if (updates.state.value is UpdateState.NeedsPermission && packageManager.canRequestPackageInstalls()) updates.install()
     }
 
     override fun onStop() {
