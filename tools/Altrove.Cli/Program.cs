@@ -11,7 +11,7 @@ using Altrove.Core.Streaming;
 // Test bench for the Windows side without the UI:
 //   altrove-cli list                         monitors, GPUs and H.264 encoders
 //   altrove-cli record [opts]                capture + encode for a few seconds, save .h264, decode it back
-//   altrove-cli discover                     receivers announcing _altrove._tcp
+//   altrove-cli discover [--direct]          receivers announcing _altrove._tcp (--direct: no multicast)
 //   altrove-cli send <host[:port]> [opts]    stream to a receiver
 //   altrove-cli fake-receiver [--port N]     a receiver on localhost that counts what arrives
 // Options: --seconds N  --fps N  --height N  --kbps N  --software  --monitor N  --out file.h264
@@ -29,7 +29,7 @@ try
     {
         "list" => List(),
         "record" => await Record(options),
-        "discover" => await Discover(options),
+        "discover" => await Discover(options, args.Contains("--direct")),
         "send" => await Send(options),
         "fake-receiver" => await FakeReceiver(options),
         "announce" => await Announce(options),
@@ -459,9 +459,10 @@ static int Analyze(Options options)
     return 0;
 }
 
-static async Task<int> Discover(Options options)
+static async Task<int> Discover(Options options, bool directOnly)
 {
-    using var browser = new MdnsBrowser();
+    // --direct: only the questions sent to each address, no multicast (what gets through routers that drop it).
+    using var browser = new MdnsBrowser(multicast: !directOnly);
     browser.Changed += list =>
     {
         Console.WriteLine($"[{DateTime.Now:T}] {list.Count} ricevitori:");

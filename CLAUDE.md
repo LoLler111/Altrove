@@ -54,6 +54,11 @@ Testi per l'utente in italiano, commenti e nomi nel codice in inglese (come in S
 - `tools/Altrove.Cli` prova cattura ed encoder senza interfaccia: `record` ridecodifica con il decoder di Windows e salva un fotogramma.
 - Ricevitore Android nell'emulatore: `adb forward tcp:47800 tcp:47800`, poi `altrove-cli send localhost:47800`.
   La ricerca mDNS dall'emulatore non si vede (rete NAT): per provarla usare `altrove-cli announce` + `discover`.
+  Neanche `adb emu redir` della 5353 serve: porta a eth0, mentre Android annuncia solo su wlan0.
+- Ricerca: `MdnsBrowser` chiede in multicast e anche direttamente a ogni indirizzo della /24 (nata da un
+  portatile Wi-Fi che non vedeva il tablet Wi-Fi: il router scartava il multicast). `altrove-cli discover --direct`
+  prova solo la via diretta. Gli indirizzi scritti a mano hanno il pallino verde se la porta risponde
+  (`ReceiverProbe`, connessione TCP chiusa subito: il ricevitore non la conta come trasmettitore).
 - La VM di sviluppo non ha GPU (Microsoft Basic Render Driver): lì gira solo il percorso CPU + encoder software.
   Il percorso hardware (GPU, AMF della RX 6750 XT) va provato sul PC fisso.
 - La VM si usa in sessione remota: il driver virtuale è installato lì, ma il suo monitor resta nella sessione

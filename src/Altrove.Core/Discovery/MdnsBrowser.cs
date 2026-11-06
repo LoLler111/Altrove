@@ -1,3 +1,4 @@
+using System.Buffers.Binary;
 using System.Collections.Concurrent;
 using System.Net;
 using System.Net.NetworkInformation;
@@ -16,25 +17,53 @@ public sealed record DiscoveredReceiver(string Id, string Name, string Host, int
 /// ordinary port on each IPv4 interface, so receivers answer straight back to it (RFC 6762 §6.7) and
 /// nothing has to share port 5353 with Windows' own mDNS service.
 /// </summary>
+/// <remarks>
+/// The question goes to the multicast group, and also straight to every address of the local network
+/// (at most a /24) every <see cref="SweepInterval"/>: many routers drop multicast between two Wi-Fi devices
+/// while passing their ordinary traffic, and Android answers a question sent to it directly. Who answered is
+/// then asked directly at every round, so it stays listed.
+/// </remarks>
 public sealed class MdnsBrowser : IDisposable
 {
-    private static readonly IPEndPoint MdnsGroup = new(IPAddress.Parse("224.0.0.251"), 5353);
+    private const int MdnsPort = 5353;
+    private static readonly IPEndPoint MdnsGroup = new(IPAddress.Parse("224.0.0.251"), MdnsPort);
     private static readonly TimeSpan QueryInterval = TimeSpan.FromSeconds(3);
     private static readonly TimeSpan Expiry = TimeSpan.FromSeconds(12);
     private static readonly TimeSpan AddressHold = TimeSpan.FromSeconds(7);
+    private static readonly TimeSpan SweepInterval = TimeSpan.FromSeconds(30);
+    private static readonly TimeSpan ResponderMemory = TimeSpan.FromMinutes(1);
 
     private readonly string _service;
     private readonly TimeProvider _time;
+    private readonly int _unicastPort;
+    private readonly bool _loopbackOnly;
     private readonly ConcurrentDictionary<string, DiscoveredReceiver> _receivers = new();
     private readonly Dictionary<IPAddress, UdpClient> _sockets = [];
+    private readonly Dictionary<IPAddress, int> _prefixes = [];
+    // Addresses that answered for our service, and when: asked directly at every round.
+    private readonly ConcurrentDictionary<IPAddress, DateTimeOffset> _responders = new();
     private readonly CancellationTokenSource _stop = new();
+    private DateTimeOffset _lastSweep = DateTimeOffset.MinValue;
     private Task? _loop;
 
-    public MdnsBrowser(string serviceType = AltroveProtocol.ServiceType, TimeProvider? time = null)
+    /// <param name="multicast">False asks only directly, address by address: tries that path alone (altrove-cli discover --direct).</param>
+    public MdnsBrowser(string serviceType = AltroveProtocol.ServiceType, TimeProvider? time = null, bool multicast = true)
+        : this(serviceType, time, MdnsPort, loopbackOnly: false)
+    {
+        _multicast = multicast;
+    }
+
+    /// <summary>For tests: direct questions go to <paramref name="unicastPort"/>, and only 127.0.0.1/24 is searched.</summary>
+    internal MdnsBrowser(string serviceType, TimeProvider? time, int unicastPort, bool loopbackOnly)
     {
         _service = serviceType.TrimEnd('.') + ".local";
         _time = time ?? TimeProvider.System;
+        _unicastPort = unicastPort;
+        _loopbackOnly = loopbackOnly;
+        _multicast = !loopbackOnly;
     }
+
+    private readonly bool _multicast;
 
     /// <summary>Raised on a background thread whenever a receiver appears, changes or disappears.</summary>
     public event Action<IReadOnlyList<DiscoveredReceiver>>? Changed;
@@ -51,16 +80,19 @@ public sealed class MdnsBrowser : IDisposable
         {
             RefreshSockets(token);
             var query = DnsMessage.BuildQuery(id, _service, DnsType.Ptr);
-            foreach (var socket in _sockets.Values.ToList())
+            if (_multicast)
             {
-                try
-                {
-                    await socket.SendAsync(query, MdnsGroup, token);
-                }
-                catch (Exception ex) when (ex is SocketException or ObjectDisposedException)
-                {
-                }
+                foreach (var socket in _sockets.Values.ToList())
+                    await SendAsync(socket, query, MdnsGroup, token);
             }
+            var now = _time.GetUtcNow();
+            if (now - _lastSweep >= SweepInterval)
+            {
+                _lastSweep = now;
+                await SweepAsync(query, token);
+            }
+            else
+                await AskRespondersAsync(query, now, token);
             Expire();
             try
             {
@@ -71,6 +103,78 @@ public sealed class MdnsBrowser : IDisposable
                 break;
             }
         }
+    }
+
+    private static async Task SendAsync(UdpClient socket, byte[] query, IPEndPoint target, CancellationToken token)
+    {
+        try
+        {
+            await socket.SendAsync(query, target, token);
+        }
+        catch (Exception ex) when (ex is SocketException or ObjectDisposedException)
+        {
+        }
+    }
+
+    /// <summary>The question, straight to every other address of each local network.</summary>
+    private async Task SweepAsync(byte[] query, CancellationToken token)
+    {
+        foreach (var (local, socket) in _sockets.ToList())
+        {
+            foreach (var target in SweepTargets(local, _prefixes.GetValueOrDefault(local), _loopbackOnly))
+                await SendAsync(socket, query, new IPEndPoint(target, _unicastPort), token);
+        }
+    }
+
+    /// <summary>The question, straight to whoever answered lately, from the interface on its network.</summary>
+    private async Task AskRespondersAsync(byte[] query, DateTimeOffset now, CancellationToken token)
+    {
+        foreach (var (address, lastSeen) in _responders)
+        {
+            if (now - lastSeen > ResponderMemory)
+            {
+                _responders.TryRemove(address, out _);
+                continue;
+            }
+            var socket = _sockets.FirstOrDefault(s => SameNetwork(s.Key, _prefixes.GetValueOrDefault(s.Key), address)).Value;
+            if (socket is not null)
+                await SendAsync(socket, query, new IPEndPoint(address, _unicastPort), token);
+        }
+    }
+
+    /// <summary>
+    /// The other addresses of a private IPv4 network, at most the /24 around <paramref name="local"/> (a bigger
+    /// network, such as a virtual switch's, would mean thousands of packets). Nothing for public addresses.
+    /// </summary>
+    internal static IEnumerable<IPAddress> SweepTargets(IPAddress local, int prefixLength, bool allowLoopback = false)
+    {
+        if (local.AddressFamily != AddressFamily.InterNetwork || prefixLength is < 1 or > 30)
+            yield break;
+        var bytes = local.GetAddressBytes();
+        var isPrivate = bytes[0] == 10 || (bytes[0] == 172 && (bytes[1] & 0xF0) == 16) || (bytes[0] == 192 && bytes[1] == 168);
+        if (!isPrivate && !(allowLoopback && bytes[0] == 127))
+            yield break;
+        var self = BinaryPrimitives.ReadUInt32BigEndian(bytes);
+        var mask = uint.MaxValue << (32 - Math.Max(prefixLength, 24));
+        var network = self & mask;
+        var broadcast = network | ~mask;
+        for (var host = network + 1; host < broadcast; host++)
+        {
+            if (host == self)
+                continue;
+            var target = new byte[4];
+            BinaryPrimitives.WriteUInt32BigEndian(target, host);
+            yield return new IPAddress(target);
+        }
+    }
+
+    internal static bool SameNetwork(IPAddress local, int prefixLength, IPAddress other)
+    {
+        if (local.AddressFamily != AddressFamily.InterNetwork || other.AddressFamily != AddressFamily.InterNetwork || prefixLength is < 1 or > 32)
+            return false;
+        var mask = uint.MaxValue << (32 - prefixLength);
+        return (BinaryPrimitives.ReadUInt32BigEndian(local.GetAddressBytes()) & mask)
+            == (BinaryPrimitives.ReadUInt32BigEndian(other.GetAddressBytes()) & mask);
     }
 
     /// <summary>mDNS packets seen so far, any service: zero means nothing reaches us (firewall, no multicast).</summary>
@@ -116,20 +220,30 @@ public sealed class MdnsBrowser : IDisposable
 
     private void RefreshSockets(CancellationToken token)
     {
-        var current = LocalIPv4Addresses().ToHashSet();
-        RefreshSharedListener(current, token);
+        var addresses = _loopbackOnly
+            ? new Dictionary<IPAddress, int> { [IPAddress.Loopback] = 8 }
+            : LocalIPv4Addresses().GroupBy(a => a.Address).ToDictionary(g => g.Key, g => g.First().PrefixLength);
+        var current = addresses.Keys.ToHashSet();
+        foreach (var (address, prefix) in addresses)
+            _prefixes[address] = prefix;
+        if (_multicast)
+            RefreshSharedListener(current, token);
         foreach (var gone in _sockets.Keys.Where(a => !current.Contains(a)).ToList())
         {
             _sockets[gone].Dispose();
             _sockets.Remove(gone);
+            _prefixes.Remove(gone);
         }
         foreach (var address in current.Where(a => !_sockets.ContainsKey(a)))
         {
             try
             {
                 var socket = new UdpClient(AddressFamily.InterNetwork);
-                socket.Client.SetSocketOption(SocketOptionLevel.IP, SocketOptionName.MulticastInterface, address.GetAddressBytes());
-                socket.Client.SetSocketOption(SocketOptionLevel.IP, SocketOptionName.MulticastTimeToLive, 255);
+                if (!_loopbackOnly)
+                {
+                    socket.Client.SetSocketOption(SocketOptionLevel.IP, SocketOptionName.MulticastInterface, address.GetAddressBytes());
+                    socket.Client.SetSocketOption(SocketOptionLevel.IP, SocketOptionName.MulticastTimeToLive, 255);
+                }
                 if (OperatingSystem.IsWindows())
                     socket.Client.IOControl(-1744830452 /* SIO_UDP_CONNRESET */, [0, 0, 0, 0], null);
                 socket.Client.Bind(new IPEndPoint(address, 0));
@@ -166,6 +280,11 @@ public sealed class MdnsBrowser : IDisposable
             }
             Interlocked.Increment(ref _packets);
             var found = Interpret(result.Buffer, result.RemoteEndPoint.Address, _service, _time.GetUtcNow());
+            if (found.Count > 0)
+            {
+                var source = result.RemoteEndPoint.Address;
+                _responders[source.IsIPv4MappedToIPv6 ? source.MapToIPv4() : source] = _time.GetUtcNow();
+            }
             var changed = false;
             foreach (var found1 in found)
             {
@@ -249,7 +368,7 @@ public sealed class MdnsBrowser : IDisposable
         }
     }
 
-    private static IEnumerable<IPAddress> LocalIPv4Addresses()
+    private static IEnumerable<(IPAddress Address, int PrefixLength)> LocalIPv4Addresses()
     {
         NetworkInterface[] interfaces;
         try
@@ -269,7 +388,7 @@ public sealed class MdnsBrowser : IDisposable
             foreach (var unicast in nic.GetIPProperties().UnicastAddresses)
             {
                 if (unicast.Address.AddressFamily == AddressFamily.InterNetwork && !IPAddress.IsLoopback(unicast.Address))
-                    yield return unicast.Address;
+                    yield return (unicast.Address, unicast.PrefixLength);
             }
         }
     }

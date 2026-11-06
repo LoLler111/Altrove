@@ -26,6 +26,11 @@ Il record TXT contiene:
 
 Il trasmettitore Windows interroga `_altrove._tcp.local` da una porta qualsiasi (non la 5353),
 così i ricevitori rispondono direttamente a lui ("legacy unicast", RFC 6762 §6.7).
+La stessa domanda va sia al gruppo multicast sia, ogni 30 s, direttamente alla porta 5353 di ogni altro
+indirizzo della rete locale (reti private, al massimo la /24 del PC): molti router scartano il multicast tra
+due dispositivi Wi-Fi ma non il traffico normale, e Android risponde anche a una domanda diretta. Chi ha
+risposto viene poi interrogato direttamente a ogni giro (3 s), così resta nell'elenco. Il ricevitore non deve
+fare niente di nuovo: basta l'annuncio mDNS di sempre.
 Se la scoperta non funziona si può sempre scrivere l'indirizzo a mano: `192.168.1.20` o `192.168.1.20:47800`.
 
 ## Connessione

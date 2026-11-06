@@ -102,7 +102,36 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
 
         _browser.Changed += found => Application.Current?.Dispatcher.BeginInvoke(() => Merge(found));
         _browser.Start();
+        _ = ProbeManualAddressesAsync(_probing.Token);
         _ = CheckForUpdatesInBackgroundAsync();
+    }
+
+    // ---- Addresses typed by hand: nothing announces them, so ask them ----
+
+    private static readonly TimeSpan ProbeInterval = TimeSpan.FromSeconds(5);
+    private readonly CancellationTokenSource _probing = new();
+
+    /// <summary>Lights the dot of a typed address while something answers on its port, like a receiver found by itself.</summary>
+    private async Task ProbeManualAddressesAsync(CancellationToken token)
+    {
+        while (!token.IsCancellationRequested)
+        {
+            // The one streaming is online by definition; leave its connection alone.
+            var items = Receivers.Where(r => r.IsManual).ToList();
+            var streamingTo = State != SessionState.Idle ? SelectedReceiver : null;
+            var results = await Task.WhenAll(items.Select(async item =>
+                item == streamingTo || await ReceiverProbe.IsReachableAsync(item.Host, item.Port, ReceiverProbe.DefaultTimeout, token)));
+            for (var i = 0; i < items.Count; i++)
+                items[i].IsOnline = results[i];
+            try
+            {
+                await Task.Delay(ProbeInterval, token);
+            }
+            catch (OperationCanceledException)
+            {
+                return;
+            }
+        }
     }
 
     // ---- Choices changed on the PC during a stream ----
@@ -1019,6 +1048,7 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
     public async ValueTask DisposeAsync()
     {
         _browser.Dispose();
+        _probing.Cancel();
         await StopAsync(null);
         ApplyDownloadedUpdate();
     }
