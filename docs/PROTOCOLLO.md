@@ -65,6 +65,8 @@ Nel proprio `hello` ciascun lato può elencare le funzioni facoltative che gesti
 |---|---|---|
 | `touch` | trasmettitore | accetta i messaggi `touch`: il ricevitore può comandare il PC con il tocco |
 | `configure` | trasmettitore | manda `settings` e accetta `configure`: il ricevitore può cambiare modalità e qualità |
+| `mouse` | trasmettitore | accetta i messaggi `mouse`: il ricevitore fa da trackpad (dalla 0.3) |
+| `scale` | trasmettitore | in `extend` il ricevitore può scegliere la scala (DPI) dello schermo virtuale (dalla 0.3) |
 
 Un messaggio facoltativo si manda solo se l'altro lato ha annunciato la funzione. Chi non manda
 `features` (le versioni 0.1) non ne gestisce nessuna. Le funzioni nuove non cambiano `protocol`.
@@ -107,7 +109,11 @@ Fine della trasmissione; la connessione può restare aperta per un nuovo `start`
   "choices": {
     "modes": ["mirror", "extend"],
     "screens": [{ "id": "\\\\.\\DISPLAY1", "name": "Schermo 1 – 3440×1440" }],
-    "maxHeights": [0, 1080, 720], "fps": [60, 30], "bitratesKbps": [6000, 12000, 20000, 30000] },
+    "maxHeights": [0, 1080, 720], "fps": [60, 30], "bitratesKbps": [6000, 12000, 20000, 30000],
+    "resolutions": [{ "maxHeight": 1200, "width": 1920, "height": 1200, "recommended": true },
+                    { "maxHeight": 1600, "width": 2560, "height": 1600, "recommended": false }],
+    "scales": [100, 125, 150, 175, 200] },
+  "scale": 125,
   "notice": "…" }
 ```
 Cosa si sta trasmettendo e cosa il ricevitore può chiedere. Arriva dopo ogni `start` e ogni volta che
@@ -116,12 +122,18 @@ qualcosa cambia.
 - `screen`: lo schermo duplicato (in `extend` è quello di prima, per tornare in `mirror`).
 - `choices.modes` contiene `extend` solo se sul PC lo schermo virtuale è installato.
 - `notice` (facoltativo): un testo per l'utente, es. perché l'ultima richiesta non è stata applicata.
+- `choices.resolutions` (dalla 0.3): le risoluzioni possibili adesso, già calcolate per la modalità e lo schermo
+  correnti (`width`×`height` è quello che arriverà davvero), dalla più grande alla più piccola. `recommended` è la
+  più grande che sta nello schermo del ricevitore. Con `resolutions`, `maxHeight` è quello della risoluzione in uso
+  (mai `0`); il ricevitore la chiede con `configure` e `maxHeight`. `maxHeights` resta per i ricevitori 0.2.
+- `scale` e `choices.scales` (dalla 0.3, funzione `scale`): la scala di Windows dello schermo virtuale in
+  percentuale. Solo in `extend`; in `mirror` `scales` è vuoto e `scale` manca.
 
 ### `configure` — ricevitore → trasmettitore (funzione `configure`)
 ```json
 { "type": "configure", "mode": "extend", "maxHeight": 720 }
 ```
-Solo i campi da cambiare, fra `mode`, `screen`, `maxHeight`, `fps`, `bitrateKbps`, con valori presi da
+Solo i campi da cambiare, fra `mode`, `screen`, `maxHeight`, `fps`, `bitrateKbps`, `scale`, con valori presi da
 `choices`. Il trasmettitore applica senza chiudere la connessione: manda un nuovo `start` (il
 ricevitore fa ripartire il decoder) e un nuovo `settings`. Se non può, rimanda il `settings` di prima
 con un `notice`.
@@ -141,6 +153,23 @@ Il trasmettitore Windows li trasforma in tocco di Windows sullo schermo trasmess
 monitor virtuale (in `extend`): un tocco è un clic, tenere premuto è il clic destro, due dita scorrono e
 ingrandiscono dove l'applicazione lo gestisce. Mentre un dito è fermo il trasmettitore ripete da sé
 l'ultima posizione, così Windows non considera il tocco interrotto: il ricevitore non deve farlo.
+
+### `mouse` — ricevitore → trasmettitore (funzione `mouse`, dalla 0.3)
+```json
+{ "type": "mouse", "action": "move", "dx": 0.0125, "dy": -0.004 }
+{ "type": "mouse", "action": "down", "button": "left" }
+{ "type": "mouse", "action": "up", "button": "left" }
+{ "type": "mouse", "action": "click", "button": "right" }
+{ "type": "mouse", "action": "scroll", "dx": 0, "dy": 1.5 }
+```
+Il ricevitore come trackpad: i gesti li riconosce lui, il trasmettitore muove il puntatore e preme i tasti.
+- `move`: spostamento relativo del puntatore, in frazioni della larghezza (`dx`) e dell'altezza (`dy`) dell'immagine.
+  Il puntatore resta dentro lo schermo trasmesso.
+- `down` / `up` / `click`: tasto `left`, `right` o `middle`; `click` è premi e rilascia.
+- `scroll`: rotellina in scatti (anche frazionari); `dy` positivo scorre verso l'alto, `dx` positivo verso destra.
+
+Gesti del ricevitore Android: un dito muove; un tocco è un clic; un tocco con due dita è il clic destro; due
+dita che scorrono sono la rotellina; doppio tocco tenendo giù il secondo trascina.
 
 ### `bye` — entrambi
 ```json

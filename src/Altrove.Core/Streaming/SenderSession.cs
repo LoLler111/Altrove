@@ -114,6 +114,9 @@ public sealed class SenderSession : IAsyncDisposable
     /// <summary>Raised on a network thread for every touch message (only if the hello announced <see cref="Features.Touch"/>).</summary>
     public event Action<TouchMessage>? TouchReceived;
 
+    /// <summary>Raised on a network thread for every mouse message (only if the hello announced <see cref="Features.Mouse"/>).</summary>
+    public event Action<MouseMessage>? MouseReceived;
+
     /// <summary>Raised on a network thread when the receiver asks to change settings.</summary>
     public event Action<ConfigureMessage>? ConfigureRequested;
 
@@ -315,6 +318,9 @@ public sealed class SenderSession : IAsyncDisposable
                         break;
                     case TouchMessage touch:
                         TouchReceived?.Invoke(touch);
+                        break;
+                    case MouseMessage mouse:
+                        MouseReceived?.Invoke(mouse);
                         break;
                     case ConfigureMessage configure:
                         ConfigureRequested?.Invoke(configure);

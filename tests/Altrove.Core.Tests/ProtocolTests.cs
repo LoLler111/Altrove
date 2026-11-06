@@ -182,4 +182,19 @@ public class ProtocolTests
         Assert.Equal(settings.Choices.Screens, parsed.Choices.Screens);
         Assert.Equal(settings.Choices.BitratesKbps, parsed.Choices.BitratesKbps);
     }
+
+    [Fact]
+    public void Mouse_and_resolutions_match_the_android_side()
+    {
+        var move = Assert.IsType<MouseMessage>(ControlMessage.Parse("{\"type\":\"mouse\",\"action\":\"move\",\"dx\":0.0125,\"dy\":-0.004}"));
+        Assert.Equal(new MouseMessage(MouseActions.Move, 0.0125, -0.004), move);
+        Assert.Equal(new MouseMessage(MouseActions.Click, Button: MouseButtons.Right),
+            ControlMessage.Parse("{\"type\":\"mouse\",\"action\":\"click\",\"button\":\"right\"}"));
+        Assert.Equal(150, Assert.IsType<ConfigureMessage>(ControlMessage.Parse("{\"type\":\"configure\",\"scale\":150}")).Scale);
+        var json = new SettingsMessage(StreamModes.Extend, null, 1200, 60, 12000,
+            new SettingsChoices([StreamModes.Mirror], [], [0], [60], [12000], [new ResolutionChoice(1200, 1920, 1200, true)], [100, 125]), Scale: 125).ToJson();
+        Assert.Contains("\"resolutions\":[{\"maxHeight\":1200,\"width\":1920,\"height\":1200,\"recommended\":true}]", json);
+        Assert.Contains("\"scales\":[100,125]", json);
+        Assert.EndsWith("\"scale\":125}", json);
+    }
 }

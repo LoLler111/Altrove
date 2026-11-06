@@ -14,7 +14,7 @@ locale a un'app ricevitore. Non serve Miracast e funziona anche con un PC colleg
 | App Windows: duplica uno schermo verso un ricevitore | fatto |
 | App Android: ricevitore (tablet, telefono, Fire TV con Fire OS) | fatto |
 | Schermo virtuale ed estensione (fase 2) | provato sul PC fisso; manca la prova con il tablet |
-| Dal tablet: tocco verso il PC e pannello delle impostazioni (fase 5) | provato nell'emulatore; manca la prova con il tablet |
+| Dal tablet: tocco, trackpad, pannello con risoluzioni e scala (fase 5) | tocco provato sul tablet; trackpad e menu delle risoluzioni nell'emulatore; scala da provare sul fisso |
 | Dal tablet: audio del PC, microfono del tablet (fase 5) | da fare |
 | Ricevitore web per Chromecast e TV LG webOS (fase 3) | da fare |
 | App Android come trasmettitore (fase 4) | da fare |
@@ -90,14 +90,23 @@ L'APK di prova finisce in `android/app/build/outputs/apk/debug/app-debug.apk`.
 
 ### Dal tablet
 
-- **Tocco**: con «Usa il PC con il tocco dal ricevitore» attivo sul PC, un tocco sull'immagine è un clic,
-  tenere premuto è il clic destro, trascinare sposta, due dita scorrono dove l'applicazione lo gestisce.
-  Funziona in Duplica e in Estendi, anche su PC senza schermo touch. Windows non lascia toccare le finestre
-  aperte come amministratore né le richieste di permesso (UAC).
-- **Pannello**: la linguetta sul bordo sinistro, o il tasto Indietro, apre il pannello. Da lì si cambiano
-  modalità, schermo, risoluzione, fluidità e qualità senza staccarsi: il PC riparte con le nuove impostazioni
-  in un paio di secondi e se le ricorda. Il pannello mostra anche fps e tempi di decodifica e ha il pulsante per
-  interrompere. Senza tocco (o con il tocco spento nel pannello) basta toccare lo schermo per aprirlo.
+Con «Usa il PC dal ricevitore (tocco e trackpad)» attivo sul PC, nel pannello del ricevitore si sceglie:
+
+- **Tocco**: si clicca dove si tocca; tenere premuto è il clic destro, trascinare sposta, due dita scorrono dove
+  l'applicazione lo gestisce.
+- **Trackpad**: come quello di un portatile. Il dito muove il puntatore (che resta sullo schermo trasmesso), un tocco
+  è un clic, un tocco con due dita è il clic destro, due dita scorrono, doppio tocco tenendo giù trascina.
+- **Spento**: il PC non riceve niente.
+
+Funziona in Duplica e in Estendi, anche su PC senza schermo touch. Windows non lascia toccare le finestre aperte come
+amministratore né le richieste di permesso (UAC).
+
+**Pannello**: la linguetta sul bordo sinistro, o il tasto Indietro, apre il pannello. In alto risoluzione, fps,
+Mbit/s ricevuti e tempo di decodifica. Da lì si cambiano senza staccarsi modalità, schermo, fluidità, qualità e
+risoluzione (un menu con tutte quelle possibili; «Consigliata» è la più grande che sta nello schermo del dispositivo;
+in Estendi ci sono anche risoluzioni più grandi, per avere più spazio). In Estendi c'è anche la **scala** di Windows
+dello schermo virtuale, per ingrandire testi e finestre solo lì. Il PC riparte in un paio di secondi e si ricorda le
+scelte. Con l'input spento basta toccare lo schermo per aprire il pannello.
 
 La prima volta Windows può chiedere di permettere ad Altrove l'accesso alla rete: va consentito per le reti private.
 
@@ -116,6 +125,7 @@ La prima volta Windows può chiedere di permettere ad Altrove l'accesso alla ret
 | `altrove-cli extend --display 1920x1200` | Attacca lo schermo virtuale a quella misura, lo registra come `record` e lo stacca |
 | `altrove-cli vdd [COMANDO]` | Stato del driver e dei display; manda un comando alla sua pipe (es. `RELOAD_DRIVER`) |
 | `altrove-cli touch 0.5,0.5 [--seconds 2]` | Un tocco (o una pressione lunga) come lo manderebbe il ricevitore, a x,y da 0 a 1 sullo schermo `--monitor N` |
+| `altrove-cli scale [150] [--monitor N]` | Legge (o imposta) la scala di Windows di uno schermo |
 | `altrove-cli stress capture\|convert\|encode --seconds 60` | Un pezzo della catena da solo per un minuto, per cercare perdite e crash |
 
 ### Schermo virtuale (Estendi)

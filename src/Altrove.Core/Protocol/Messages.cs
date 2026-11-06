@@ -27,6 +27,7 @@ public sealed record DisplayInfo(int Width, int Height, double RefreshRate);
 [JsonDerivedType(typeof(SettingsMessage), "settings")]
 [JsonDerivedType(typeof(ConfigureMessage), "configure")]
 [JsonDerivedType(typeof(TouchMessage), "touch")]
+[JsonDerivedType(typeof(MouseMessage), "mouse")]
 public abstract record ControlMessage
 {
     private static readonly JsonSerializerOptions Options = new(JsonSerializerDefaults.Web)
@@ -53,7 +54,7 @@ public abstract record ControlMessage
     }
 
     private static readonly HashSet<string> KnownTypes =
-        ["hello", "start", "stop", "keyframe", "ping", "pong", "stats", "bye", "settings", "configure", "touch"];
+        ["hello", "start", "stop", "keyframe", "ping", "pong", "stats", "bye", "settings", "configure", "touch", "mouse"];
 }
 
 public static class Roles
@@ -76,6 +77,12 @@ public static class Features
 
     /// <summary>The sender sends settings and accepts configure.</summary>
     public const string Configure = "configure";
+
+    /// <summary>The sender accepts mouse messages (the receiver as a trackpad).</summary>
+    public const string Mouse = "mouse";
+
+    /// <summary>In extend mode the receiver may choose the virtual monitor's scale.</summary>
+    public const string Scale = "scale";
 }
 
 public static class TouchStates
@@ -84,6 +91,22 @@ public static class TouchStates
     public const string Move = "move";
     public const string Up = "up";
     public const string Cancel = "cancel";
+}
+
+public static class MouseActions
+{
+    public const string Move = "move";
+    public const string Down = "down";
+    public const string Up = "up";
+    public const string Click = "click";
+    public const string Scroll = "scroll";
+}
+
+public static class MouseButtons
+{
+    public const string Left = "left";
+    public const string Right = "right";
+    public const string Middle = "middle";
 }
 
 public static class ByeReasons
@@ -131,7 +154,12 @@ public sealed record SettingsChoices(
     IReadOnlyList<ScreenChoice> Screens,
     IReadOnlyList<int> MaxHeights,
     IReadOnlyList<int> Fps,
-    IReadOnlyList<int> BitratesKbps);
+    IReadOnlyList<int> BitratesKbps,
+    IReadOnlyList<ResolutionChoice>? Resolutions = null,
+    IReadOnlyList<int>? Scales = null);
+
+/// <summary>One resolution the receiver may pick: what <c>MaxHeight</c> gives in the current mode, <c>Width</c>×<c>Height</c>.</summary>
+public sealed record ResolutionChoice(int MaxHeight, int Width, int Height, bool Recommended);
 
 /// <summary>What is being streamed, and what the receiver can change. <c>MaxHeight</c> 0 means automatic.</summary>
 public sealed record SettingsMessage(
@@ -141,7 +169,8 @@ public sealed record SettingsMessage(
     int Fps,
     int BitrateKbps,
     SettingsChoices Choices,
-    string? Notice = null) : ControlMessage;
+    string? Notice = null,
+    int? Scale = null) : ControlMessage;
 
 /// <summary>A receiver's request to change some settings; null fields stay as they are.</summary>
 public sealed record ConfigureMessage(
@@ -149,10 +178,14 @@ public sealed record ConfigureMessage(
     string? Screen = null,
     int? MaxHeight = null,
     int? Fps = null,
-    int? BitrateKbps = null) : ControlMessage;
+    int? BitrateKbps = null,
+    int? Scale = null) : ControlMessage;
 
 /// <summary>One finger on the receiver's screen, at a position on the streamed image from 0 to 1.</summary>
 public sealed record TouchPointer(int Id, double X, double Y, string State);
 
 /// <summary>Every finger touching the receiver right now, sent at each change.</summary>
 public sealed record TouchMessage(IReadOnlyList<TouchPointer> Pointers) : ControlMessage;
+
+/// <summary>The receiver as a trackpad: a relative move (fractions of the image), a button, or the wheel (notches).</summary>
+public sealed record MouseMessage(string Action, double? Dx = null, double? Dy = null, string? Button = null) : ControlMessage;

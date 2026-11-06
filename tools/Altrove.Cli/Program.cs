@@ -38,6 +38,7 @@ try
         "extend" => await Extend(options),
         "vdd-detach" => VddDetach(),
         "touch" => await Touch(options, args.Contains("--seconds")),
+        "scale" => Scale(options),
         "stress" => await Stress(options),
         _ => Usage(),
     };
@@ -131,6 +132,26 @@ static async Task<int> Stress(Options options)
     encoder?.Dispose();
     converter?.Dispose();
     Console.WriteLine($"Fine: {frames} fotogrammi, {encoded} codificati");
+    return 0;
+}
+
+static int Scale(Options options)
+{
+    // altrove-cli scale [--monitor N] reads the Windows scale of a monitor; altrove-cli scale 150 sets it.
+    var monitor = PickMonitor(options);
+    if (options.Positional is { } wanted)
+    {
+        var ok = Altrove.Capture.VirtualDisplay.DisplayScale.Set(monitor.DeviceName, int.Parse(wanted));
+        Console.WriteLine(ok ? $"Scala di {monitor.DisplayName}: {wanted}%" : "Windows non ha accettato la scala.");
+        if (!ok)
+            return 1;
+    }
+    if (Altrove.Capture.VirtualDisplay.DisplayScale.Get(monitor.DeviceName) is not { } scale)
+    {
+        Console.WriteLine($"Scala di {monitor.DisplayName} non leggibile.");
+        return 1;
+    }
+    Console.WriteLine($"{monitor.DisplayName} ({monitor.DeviceName}): {scale.Current}%, possibili {string.Join(", ", scale.Available)}");
     return 0;
 }
 

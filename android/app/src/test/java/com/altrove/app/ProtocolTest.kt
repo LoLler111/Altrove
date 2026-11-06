@@ -8,6 +8,8 @@ import com.altrove.app.protocol.H264
 import com.altrove.app.protocol.Hello
 import com.altrove.app.protocol.Keyframe
 import com.altrove.app.protocol.Messages
+import com.altrove.app.protocol.Mouse
+import com.altrove.app.protocol.ResolutionChoice
 import com.altrove.app.protocol.Ping
 import com.altrove.app.protocol.Start
 import com.altrove.app.protocol.ScreenChoice
@@ -125,5 +127,21 @@ class ProtocolTest {
         assertEquals(TouchStates.CANCEL, TouchMapper.message(MotionEvent.ACTION_CANCEL, 0, intArrayOf(3), floatArrayOf(1f), floatArrayOf(1f), 10, 10)!!.pointers[0].state)
         assertNull(TouchMapper.message(MotionEvent.ACTION_HOVER_MOVE, 0, intArrayOf(0), floatArrayOf(1f), floatArrayOf(1f), 10, 10))
         assertNull(TouchMapper.message(MotionEvent.ACTION_DOWN, 0, intArrayOf(0), floatArrayOf(1f), floatArrayOf(1f), 0, 10))
+    }
+
+    @Test
+    fun mouse_and_resolutions_match_the_windows_side() {
+        assertEquals("""{"type":"mouse","action":"move","dx":0.0125,"dy":-0.004}""", Messages.encode(Mouse("move", dx = 0.0125, dy = -0.004)))
+        assertEquals("""{"type":"mouse","action":"click","button":"right"}""", Messages.encode(Mouse("click", button = "right")))
+        val settings = Messages.parse(
+            """{"type":"settings","mode":"extend","maxHeight":1200,"fps":60,"bitrateKbps":12000,"scale":125,""" +
+                """"choices":{"modes":["mirror","extend"],"screens":[],"maxHeights":[0],"fps":[60],"bitratesKbps":[12000],""" +
+                """"resolutions":[{"maxHeight":1600,"width":2560,"height":1600,"recommended":false},{"maxHeight":1200,"width":1920,"height":1200,"recommended":true}],""" +
+                """"scales":[100,125,150]}}""",
+        ) as StreamSettings
+        assertEquals(125, settings.scale)
+        assertEquals(ResolutionChoice(1200, 1920, 1200, true), settings.choices.resolutions!![1])
+        assertEquals(listOf(100, 125, 150), settings.choices.scales)
+        assertEquals("""{"type":"configure","scale":150}""", Messages.encode(Configure(scale = 150)))
     }
 }

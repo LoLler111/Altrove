@@ -18,6 +18,7 @@ import com.altrove.app.protocol.DisplayInfo
 import com.altrove.app.protocol.Hello
 import com.altrove.app.protocol.Keyframe
 import com.altrove.app.protocol.Messages
+import com.altrove.app.protocol.Mouse
 import com.altrove.app.protocol.Ping
 import com.altrove.app.protocol.Pong
 import com.altrove.app.protocol.Start
@@ -37,6 +38,9 @@ import org.java_websocket.WebSocket
 import java.net.Inet4Address
 import java.net.NetworkInterface
 import java.util.UUID
+
+/** What fingers on the video do. */
+enum class InputMode { TOUCH, TRACKPAD, OFF }
 
 sealed interface ReceiverState {
     /** Listening and announced; [addresses] is what the user can type on the PC if discovery fails. */
@@ -69,7 +73,11 @@ class ReceiverController(private val context: Context) : ReceiverServer.Listener
     private val _features = MutableStateFlow<Set<String>>(emptySet())
     private val _settings = MutableStateFlow<StreamSettings?>(null)
     private val _applying = MutableStateFlow(false)
-    private val _touchEnabled = MutableStateFlow(prefs.getBoolean("touch", true))
+    private val _inputMode = MutableStateFlow(
+        // 0.2 kept only "touch on/off".
+        prefs.getString("input", null)?.let { saved -> InputMode.entries.firstOrNull { it.name == saved } }
+            ?: if (prefs.getBoolean("touch", true)) InputMode.TOUCH else InputMode.OFF,
+    )
     private var applyingJob: Job? = null
 
     val state: StateFlow<ReceiverState> = _state
@@ -81,23 +89,30 @@ class ReceiverController(private val context: Context) : ReceiverServer.Listener
     val settings: StateFlow<StreamSettings?> = _settings
     /** A [configure] was sent and the sender has not answered yet. */
     val applying: StateFlow<Boolean> = _applying
-    /** The user's choice: touches on the video go to the PC. */
-    val touchEnabled: StateFlow<Boolean> = _touchEnabled
+    /** The user's choice: what fingers on the video do to the PC. */
+    val inputMode: StateFlow<InputMode> = _inputMode
 
     val deviceId: String by lazy {
         prefs.getString("id", null) ?: UUID.randomUUID().toString().replace("-", "").also { prefs.edit().putString("id", it).apply() }
     }
 
-    fun setTouchEnabled(enabled: Boolean) {
-        _touchEnabled.value = enabled
-        prefs.edit().putBoolean("touch", enabled).apply()
+    fun setInputMode(mode: InputMode) {
+        _inputMode.value = mode
+        prefs.edit().putString("input", mode.name).apply()
     }
 
-    /** True when a touch on the video should go to the PC rather than open the panel. */
-    val sendsTouch get() = _touchEnabled.value && Features.TOUCH in _features.value
+    /** Fingers on the video are touches on the PC. */
+    val sendsTouch get() = _inputMode.value == InputMode.TOUCH && Features.TOUCH in _features.value
+
+    /** Fingers on the video drive the PC's pointer like a trackpad. */
+    val sendsMouse get() = _inputMode.value == InputMode.TRACKPAD && Features.MOUSE in _features.value
 
     fun sendTouch(touch: Touch) {
         if (sendsTouch) server?.send(touch)
+    }
+
+    fun sendMouse(mouse: Mouse) {
+        if (sendsMouse) server?.send(mouse)
     }
 
     /** Asks the sender for other settings; [applying] stays true until its new settings arrive. */
@@ -238,7 +253,10 @@ class ReceiverController(private val context: Context) : ReceiverServer.Listener
         }
     }
 
+    private val receivedBytes = java.util.concurrent.atomic.AtomicLong()
+
     override fun onVideo(connection: WebSocket, packet: VideoPacket) {
+        receivedBytes.addAndGet(packet.length.toLong())
         synchronized(lock) { decoder }?.submit(packet)
     }
 
@@ -265,7 +283,9 @@ class ReceiverController(private val context: Context) : ReceiverServer.Listener
                 val decoder = synchronized(lock) { decoder } ?: continue
                 val (frames, dropped, decodeMs) = decoder.takeStats()
                 server?.send(Stats(frames.toDouble(), decodeMs, dropped))
-                _stats.value = "$frames fps · decodifica ${"%.0f".format(decodeMs)} ms" + (decoder.decoderName?.let { " · $it" } ?: "")
+                val mbps = receivedBytes.getAndSet(0) * 8 / 1_000_000.0
+                _stats.value = "$frames fps · ${"%.1f".format(mbps)} Mbit/s · decodifica ${"%.0f".format(decodeMs)} ms" +
+                    (decoder.decoderName?.let { " · $it" } ?: "")
             }
         }
     }
@@ -278,18 +298,29 @@ class ReceiverController(private val context: Context) : ReceiverServer.Listener
             ?: Build.MODEL
 
     /** The largest stream worth sending: what the screen shows, within what the decoder handles at 30 fps or more. */
+    /**
+     * The largest stream the H.264 decoder handles at 30 fps, in landscape: what the PC may send, even bigger
+     * than this screen (in Estendi a bigger virtual monitor gives more room). The PC itself recommends the
+     * resolution that fits the screen. Sizes in this screen's shape come first, so its own is never refused.
+     */
     private fun maxStreamSize(): Pair<Int, Int> {
         val long = maxOf(display.width, display.height)
         val short = minOf(display.width, display.height)
-        val sizes = listOf(3840 to 2160, 2560 to 1440, 1920 to 1080, 1280 to 720)
-        val decodable = sizes.firstOrNull { (w, h) ->
-            MediaCodecList(MediaCodecList.REGULAR_CODECS).codecInfos.any { info ->
-                !info.isEncoder && info.supportedTypes.any { it.equals(MediaFormat.MIMETYPE_VIDEO_AVC, true) } &&
-                    info.getCapabilitiesForType(MediaFormat.MIMETYPE_VIDEO_AVC).videoCapabilities
-                        ?.areSizeAndRateSupported(w, h, 30.0) == true
-            }
-        } ?: (1280 to 720)
-        return minOf(decodable.first, long) to minOf(decodable.second, short)
+        val aspect = long.toDouble() / short
+        val ownShape = listOf(2160, 1600, 1440, 1200, 1080, 900, 720).map { h -> ((h * aspect).toInt() and 1.inv()) to h }
+        val sizes = (ownShape + listOf(3840 to 2160, 2560 to 1440, 1920 to 1080, 1280 to 720)).sortedByDescending { it.first * it.second }
+        val decoders = MediaCodecList(MediaCodecList.REGULAR_CODECS).codecInfos.filter { info ->
+            !info.isEncoder && info.supportedTypes.any { it.equals(MediaFormat.MIMETYPE_VIDEO_AVC, true) }
+        }
+        fun decodable(size: Pair<Int, Int>) = decoders.any { info ->
+            info.getCapabilitiesForType(MediaFormat.MIMETYPE_VIDEO_AVC).videoCapabilities
+                ?.areSizeAndRateSupported(size.first, size.second, 30.0) == true
+        }
+        val supported = sizes.filter(::decodable)
+        if (supported.isEmpty()) return minOf(1280, long) to minOf(720, short)
+        // The PC reads these as a box: report the biggest box whose corner the decoder still handles.
+        val box = supported.maxOf { it.first } to supported.maxOf { it.second }
+        return if (decodable(box)) box else supported.first()
     }
 
     private fun localAddresses(): List<String> = try {

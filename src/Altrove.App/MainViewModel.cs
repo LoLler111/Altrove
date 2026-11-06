@@ -71,9 +71,9 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
         foreach (var choice in ModeChoices)
             choice.PropertyChanged += (_, _) => OnPropertyChanged(nameof(IsExtend));
 
-        foreach (var (label, value) in new[] { ("Automatica", 0), ("1080p", 1080), ("720p", 720) })
+        foreach (var (label, value) in new[] { ("Automatica", 0), ("2160p", 2160), ("1440p", 1440), ("1080p", 1080), ("720p", 720) })
             ResolutionChoices.Add(new Choice<int> { Label = label, Value = value });
-        Select(ResolutionChoices, ResolutionChoices.FirstOrDefault(c => c.Value == _settings.MaxHeight) ?? ResolutionChoices[0]);
+        SelectHeight(_settings.MaxHeight);
 
         foreach (var fps in new[] { 60, 30 })
             FpsChoices.Add(new Choice<int> { Label = $"{fps} fps", Value = fps });
@@ -327,9 +327,9 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
         _connecting = new CancellationTokenSource();
         try
         {
-            List<string> features = [Features.Configure];
+            List<string> features = [Features.Configure, Features.Scale];
             if (AllowTouch)
-                features.Add(Features.Touch);
+                features.AddRange([Features.Touch, Features.Mouse]);
             var self = new HelloMessage(AltroveProtocol.Version, Roles.Sender, _settings.DeviceId, Environment.MachineName,
                 typeof(MainViewModel).Assembly.GetName().Version?.ToString(3), Features: features);
             var session = await SenderSession.ConnectAsync(ReceiverAddress.ToUri(receiver.Host, receiver.Port), self, _connecting.Token);
@@ -349,6 +349,8 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
                 {
                     _touch = null; // Windows too old for synthetic touch: stream without it
                 }
+                _mouse = new MouseInjector(monitor);
+                session.MouseReceived += OnMouse;
             }
 
             await StartStreamAsync(session, _connecting.Token);
@@ -375,7 +377,44 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
     private TouchInjector? _touch;
     private readonly SemaphoreSlim _reconfiguring = new(1, 1);
 
+    private MouseInjector? _mouse;
+    private MonitorInfo? _streamTarget;
+
     private void OnTouch(TouchMessage touch) => _touch?.Inject(touch);
+
+    private void OnMouse(MouseMessage mouse) => _mouse?.Inject(mouse);
+
+    /// <summary>Selects the resolution chip for <paramref name="height"/>, adding one if a receiver picked a height the PC does not list.</summary>
+    private void SelectHeight(int height)
+    {
+        var chip = ResolutionChoices.FirstOrDefault(c => c.Value == height);
+        if (chip is null)
+        {
+            chip = new Choice<int> { Label = $"{height}p", Value = height };
+            var index = ResolutionChoices.Skip(1).TakeWhile(c => c.Value > height).Count() + 1;
+            ResolutionChoices.Insert(index, chip);
+        }
+        Select(ResolutionChoices, chip);
+    }
+
+    // The receiver's screen and decoder limits, in landscape, for the resolution choices.
+    private static (int Width, int Height, int MaxWidth, int MaxHeight) ReceiverLimits(SenderSession session)
+    {
+        var display = session.Receiver.Display;
+        var width = display?.Width ?? 1920;
+        var height = display?.Height ?? 1080;
+        return (Math.Max(width, height), Math.Min(width, height),
+            session.Receiver.MaxWidth ?? Math.Max(width, height), session.Receiver.MaxHeight ?? Math.Min(width, height));
+    }
+
+    private IReadOnlyList<ResolutionChoice> ResolutionsFor(SenderSession session)
+    {
+        var (w, h, maxW, maxH) = ReceiverLimits(session);
+        if (IsExtend)
+            return Altrove.Core.Video.ResolutionPlanner.Extend(w, h, maxW, maxH);
+        var screen = Selected(MonitorChoices)!;
+        return Altrove.Core.Video.ResolutionPlanner.Mirror(screen.Width, screen.Height, maxW, maxH, w, h);
+    }
 
     /// <summary>
     /// Starts streaming with the choices as they are now, or switches the running stream to them: the old
@@ -400,12 +439,13 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
         {
             // A new monitor exactly the receiver's shape, streamed 1:1: no scaling, no black bars.
             Status = $"Creo lo schermo virtuale per {_receiverName}…";
-            var display = session.Receiver.Display;
-            var mode = VirtualMonitor.PlanMode(display?.Width ?? 1920, display?.Height ?? 1080,
-                session.Receiver.MaxWidth ?? 1920, session.Receiver.MaxHeight ?? 1080, maxHeight > 0 ? maxHeight : null, fps);
+            var (w, h, maxW, maxH) = ReceiverLimits(session);
+            var size = Altrove.Core.Video.ResolutionPlanner.ExtendSize(w, h, maxW, maxH, maxHeight);
             _virtualAttached = true;
-            target = await VirtualMonitor.AttachAsync(mode, token);
+            target = await VirtualMonitor.AttachAsync(new DisplayMode(size.Width, size.Height, fps), token);
             (width, height) = (target.Width & ~1, target.Height & ~1);
+            if (_settings.ExtendScale > 0 && !DisplayScale.Set(target.DeviceName, _settings.ExtendScale))
+                App.Log($"Scala {_settings.ExtendScale}% non applicata a {target.DeviceName}.");
         }
         else
         {
@@ -417,7 +457,8 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
             // Monitor handles do not survive a change of the desktop layout: look the screen up again.
             var chosen = Selected(MonitorChoices)!;
             target = Monitors.List().FirstOrDefault(m => m.DeviceName.Equals(chosen.DeviceName, StringComparison.OrdinalIgnoreCase)) ?? chosen;
-            (width, height) = session.PlanSize(target.Width, target.Height, maxHeight > 0 ? maxHeight : null);
+            var (w, h, maxW, maxH) = ReceiverLimits(session);
+            (width, height) = Altrove.Core.Video.ResolutionPlanner.MirrorSize(target.Width, target.Height, maxW, maxH, w, h, maxHeight);
         }
 
         var settings = new EncoderSettings(width, height, fps, Selected(BitrateChoices) * 1000);
@@ -429,6 +470,8 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
         else
             await session.StartAsync(source, settings, streamMode, token);
         _touch?.SetTarget(target);
+        _mouse?.SetTarget(target);
+        _streamTarget = target;
         session.SendSettings(CurrentSettings(null));
         Status = extend
             ? $"{_receiverName} è un nuovo schermo a destra degli altri: {width}×{height}, {fps} fps · {source.EncoderName}"
@@ -441,10 +484,34 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
         List<string> modes = [StreamModes.Mirror];
         if (VirtualMonitor.IsDriverInstalled && !VirtualMonitor.IsRemoteSession)
             modes.Add(StreamModes.Extend);
+
+        // The resolutions as this receiver would get them now; the one in use, never "automatic".
+        IReadOnlyList<ResolutionChoice>? resolutions = null;
+        var maxHeight = Selected(ResolutionChoices);
+        if (_session is { } session)
+        {
+            resolutions = ResolutionsFor(session);
+            var streaming = _streamTarget is { } t && IsExtend ? (t.Width & ~1, t.Height & ~1) : ((int, int)?)null;
+            var inUse = resolutions.FirstOrDefault(r => r.MaxHeight == maxHeight)
+                ?? (streaming is { } s ? resolutions.FirstOrDefault(r => (r.Width, r.Height) == s) : null)
+                ?? resolutions.FirstOrDefault(r => r.Recommended);
+            if (inUse is not null)
+                maxHeight = inUse.MaxHeight;
+        }
+
+        // The virtual monitor's Windows scale, only in Estendi.
+        int? scale = null;
+        IReadOnlyList<int> scales = [];
+        if (IsExtend && _streamTarget is { IsVirtual: true } monitor && DisplayScale.Get(monitor.DeviceName) is { } current)
+        {
+            scale = current.Current;
+            scales = current.Available;
+        }
+
         return new SettingsMessage(
             Selected(ModeChoices) ?? StreamModes.Mirror,
             Selected(MonitorChoices)?.DeviceName,
-            Selected(ResolutionChoices),
+            maxHeight,
             Selected(FpsChoices),
             Selected(BitrateChoices) * 1000,
             new SettingsChoices(
@@ -452,8 +519,11 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
                 MonitorChoices.Select(c => new ScreenChoice(c.Value.DeviceName, c.Label)).ToList(),
                 ResolutionChoices.Select(c => c.Value).ToList(),
                 FpsChoices.Select(c => c.Value).ToList(),
-                BitrateChoices.Select(c => c.Value * 1000).ToList()),
-            notice);
+                BitrateChoices.Select(c => c.Value * 1000).ToList(),
+                resolutions,
+                scales),
+            notice,
+            scale);
     }
 
     /// <summary>The receiver asked for other settings: apply them to the running stream, or put the old ones back.</summary>
@@ -468,17 +538,34 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
                 Fps: Selected(FpsChoices), Mbps: Selected(BitrateChoices));
 
             string? notice = null;
-            if (request.Mode is { } mode)
+            if (request.Mode is { } mode && mode != before.Mode)
             {
                 if (mode == StreamModes.Extend && !CurrentSettings(null).Choices.Modes.Contains(StreamModes.Extend))
                     notice = "Sul PC lo schermo virtuale non è disponibile: attivalo una volta scegliendo Estendi in Altrove sul PC.";
                 else
+                {
                     Select(ModeChoices, ModeChoices.FirstOrDefault(c => c.Value == mode));
+                    // The other mode has other resolutions: start from the recommended one.
+                    if (request.MaxHeight is null)
+                        SelectHeight(0);
+                }
             }
             if (request.Screen is { } screen)
                 Select(MonitorChoices, MonitorChoices.FirstOrDefault(c => c.Value.DeviceName == screen) ?? MonitorChoices.FirstOrDefault(c => c.IsSelected));
-            if (request.MaxHeight is { } height)
-                Select(ResolutionChoices, ResolutionChoices.FirstOrDefault(c => c.Value == height) ?? ResolutionChoices.First(c => c.IsSelected));
+            if (request.MaxHeight is { } height and >= 0)
+                SelectHeight(height);
+
+            // The scale changes the virtual monitor in place: no new stream.
+            if (request.Scale is { } percent && IsExtend && _streamTarget is { IsVirtual: true } virtualMonitor)
+            {
+                if (DisplayScale.Set(virtualMonitor.DeviceName, percent))
+                {
+                    _settings.ExtendScale = percent;
+                    _settings.Save();
+                }
+                else
+                    notice = $"Windows non ha accettato la scala {percent}%.";
+            }
             if (request.Fps is { } fps)
                 Select(FpsChoices, FpsChoices.FirstOrDefault(c => c.Value == fps) ?? FpsChoices.First(c => c.IsSelected));
             if (request.BitrateKbps is { } kbps)
@@ -502,7 +589,7 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
                 // Back to what worked, and tell the receiver why.
                 Select(ModeChoices, ModeChoices.FirstOrDefault(c => c.Value == before.Mode));
                 Select(MonitorChoices, MonitorChoices.FirstOrDefault(c => c.Value == before.Monitor));
-                Select(ResolutionChoices, ResolutionChoices.FirstOrDefault(c => c.Value == before.Height));
+                SelectHeight(before.Height);
                 Select(FpsChoices, FpsChoices.FirstOrDefault(c => c.Value == before.Fps));
                 Select(BitrateChoices, BitrateChoices.FirstOrDefault(c => c.Value == before.Mbps));
                 SaveChoices();
@@ -558,10 +645,13 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
         {
             session.StatsUpdated -= OnStats;
             session.TouchReceived -= OnTouch;
+            session.MouseReceived -= OnMouse;
             await session.DisposeAsync();
         }
         _touch?.Dispose();
         _touch = null;
+        _mouse = null;
+        _streamTarget = null;
         if (source is not null)
             await source.DisposeAsync();
         if (_virtualAttached)

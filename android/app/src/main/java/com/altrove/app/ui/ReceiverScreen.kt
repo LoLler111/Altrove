@@ -46,6 +46,7 @@ import androidx.compose.ui.viewinterop.AndroidView
 import com.altrove.app.receiver.ReceiverController
 import com.altrove.app.receiver.ReceiverState
 import com.altrove.app.receiver.TouchMapper
+import com.altrove.app.receiver.TrackpadGestures
 import com.altrove.app.update.UpdateController
 
 @Composable
@@ -152,12 +153,20 @@ private fun VideoScreen(receiver: ReceiverController, state: ReceiverState.Strea
                         override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) = Unit
                         override fun surfaceDestroyed(holder: SurfaceHolder) = receiver.detachSurface()
                     })
-                    // On the picture: fingers go to the PC, or, without touch control, a tap opens the panel.
+                    // On the picture: fingers go to the PC as touches or as a trackpad; with neither, a tap opens the panel.
+                    val density = resources.displayMetrics.density
+                    val trackpad = TrackpadGestures(slopPx = 8 * density, notchPx = 24 * density)
                     setOnTouchListener { view, event ->
-                        if (receiver.sendsTouch) {
-                            TouchMapper.message(event, view.width, view.height)?.let(receiver::sendTouch)
-                        } else if (event.actionMasked == MotionEvent.ACTION_UP) {
-                            panelOpen = true
+                        when {
+                            receiver.sendsTouch -> TouchMapper.message(event, view.width, view.height)?.let(receiver::sendTouch)
+                            receiver.sendsMouse -> {
+                                trackpad.onEvent(event, view.width, view.height).forEach(receiver::sendMouse)
+                                // A single tap waits to see whether a second one follows.
+                                trackpad.deadline?.let { due ->
+                                    view.postDelayed({ trackpad.onTimeout(due).forEach(receiver::sendMouse) }, due - event.eventTime)
+                                }
+                            }
+                            event.actionMasked == MotionEvent.ACTION_UP -> panelOpen = true
                         }
                         true
                     }

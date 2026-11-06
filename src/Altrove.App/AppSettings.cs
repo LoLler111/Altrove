@@ -16,6 +16,8 @@ public sealed class AppSettings
     public bool SoftwareEncoder { get; set; }
     public string Mode { get; set; } = "mirror";
     public bool AllowTouch { get; set; } = true;
+    /// <summary>Windows scale of the virtual monitor in percent, 0 = what Windows picks.</summary>
+    public int ExtendScale { get; set; }
 
     private static readonly JsonSerializerOptions Options = new() { WriteIndented = true };
 

@@ -20,6 +20,10 @@ Testi per l'utente in italiano, commenti e nomi nel codice in inglese (come in S
   tocco sintetico di Windows, ripete da sé la posizione di un dito fermo) e `configure` (il ricevitore cambia le
   impostazioni: `MainViewModel.ConfigureAsync` → `StartStreamAsync` → `SenderSession.SwitchSourceAsync`, stessa connessione).
 - `ScreenVideoSource`: il fotogramma in conversione e lo smontaggio sono esclusivi (`_frameLock`).
+- Risoluzioni: `Core/Video/ResolutionPlanner` (Duplica: lo schermo rimpicciolito, mai ingrandito; Estendi: forma del
+  ricevitore, anche più grande). Ogni scelta ha come chiave l'altezza risultante. Il ricevitore riporta in `maxWidth`/`maxHeight`
+  il limite del decoder, non del proprio schermo. Trackpad: gesti in `receiver/TrackpadGestures.kt`, puntatore in
+  `Capture/Input/MouseInjector`. Scala di Estendi: `VirtualDisplay/DisplayScale` (richieste DPI non documentate -3/-4).
 
 ## Rilasci e aggiornamenti
 - Repository pubblico `LoLler111/Altrove`; un tag `vX.Y.Z` uguale a `version.txt` fa partire `.github/workflows/release.yml`

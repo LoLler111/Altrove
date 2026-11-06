@@ -75,6 +75,12 @@ object Features {
 
     /** The sender sends settings and accepts configure. */
     const val CONFIGURE = "configure"
+
+    /** The sender accepts mouse messages (this receiver as a trackpad). */
+    const val MOUSE = "mouse"
+
+    /** In extend mode the virtual monitor's scale can be chosen. */
+    const val SCALE = "scale"
 }
 
 object TouchStates {
@@ -100,7 +106,13 @@ data class SettingsChoices(
     val maxHeights: List<Int>,
     val fps: List<Int>,
     val bitratesKbps: List<Int>,
+    val resolutions: List<ResolutionChoice>? = null,
+    val scales: List<Int>? = null,
 )
+
+/** A resolution the sender offers: [maxHeight] is what to ask for, [width]×[height] what arrives. */
+@Serializable
+data class ResolutionChoice(val maxHeight: Int, val width: Int, val height: Int, val recommended: Boolean = false)
 
 /** What the sender is streaming and what can be changed; [maxHeight] 0 means automatic. */
 @Serializable
@@ -113,6 +125,7 @@ data class StreamSettings(
     val bitrateKbps: Int,
     val choices: SettingsChoices,
     val notice: String? = null,
+    val scale: Int? = null,
 ) : ControlMessage()
 
 /** A request to change some settings; null fields stay as they are. */
@@ -124,6 +137,7 @@ data class Configure(
     val maxHeight: Int? = null,
     val fps: Int? = null,
     val bitrateKbps: Int? = null,
+    val scale: Int? = null,
 ) : ControlMessage()
 
 /** One finger, at a position on the streamed image from 0 to 1. */
@@ -135,8 +149,26 @@ data class TouchPointer(val id: Int, val x: Double, val y: Double, val state: St
 @SerialName("touch")
 data class Touch(val pointers: List<TouchPointer>) : ControlMessage()
 
+object MouseActions {
+    const val MOVE = "move"
+    const val DOWN = "down"
+    const val UP = "up"
+    const val CLICK = "click"
+    const val SCROLL = "scroll"
+}
+
+object MouseButtons {
+    const val LEFT = "left"
+    const val RIGHT = "right"
+}
+
+/** This receiver as a trackpad: a relative move (fractions of the image), a button, or the wheel (notches). */
+@Serializable
+@SerialName("mouse")
+data class Mouse(val action: String, val dx: Double? = null, val dy: Double? = null, val button: String? = null) : ControlMessage()
+
 object Messages {
-    private val known = setOf("hello", "start", "stop", "keyframe", "ping", "pong", "stats", "bye", "settings", "configure", "touch")
+    private val known = setOf("hello", "start", "stop", "keyframe", "ping", "pong", "stats", "bye", "settings", "configure", "touch", "mouse")
 
     val json = Json {
         classDiscriminator = "type"

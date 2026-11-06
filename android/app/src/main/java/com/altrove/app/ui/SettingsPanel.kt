@@ -1,6 +1,7 @@
 package com.altrove.app.ui
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
@@ -17,24 +18,30 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.altrove.app.protocol.Configure
 import com.altrove.app.protocol.Features
 import com.altrove.app.protocol.StreamModes
+import com.altrove.app.receiver.InputMode
 import com.altrove.app.receiver.ReceiverController
 import com.altrove.app.receiver.ReceiverState
 
@@ -53,7 +60,7 @@ fun SettingsPanel(
     val settings by receiver.settings.collectAsState()
     val features by receiver.senderFeatures.collectAsState()
     val applying by receiver.applying.collectAsState()
-    val touchEnabled by receiver.touchEnabled.collectAsState()
+    val inputMode by receiver.inputMode.collectAsState()
     val stats by receiver.stats.collectAsState()
 
     Column(
@@ -67,10 +74,15 @@ fun SettingsPanel(
         verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
         Text("Collegato a ${state.senderName}", color = AltroveColors.Text, fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
+        // Two lines kept for the numbers, so the controls below never move when they change.
         Text(
-            "${state.width}×${state.height} · ${modeLabel(settings?.mode ?: StreamModes.MIRROR)}",
+            "${state.width}×${state.height} · ${modeLabel(settings?.mode ?: StreamModes.MIRROR)}" +
+                (settings?.scale?.let { " · scala $it%" } ?: "") + "\n" + stats.ifEmpty { "…" },
             color = AltroveColors.TextDim,
             fontSize = 13.sp,
+            minLines = 2,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
         )
         Spacer(Modifier.height(4.dp))
         Button(onClick = onClose, modifier = Modifier.fillMaxWidth().focusRequester(firstFocus)) { Text("Torna allo schermo") }
@@ -97,8 +109,23 @@ fun SettingsPanel(
                 }
             }
             Section("RISOLUZIONE")
-            Chips(current.choices.maxHeights, current.maxHeight, enabled, { if (it == 0) "Automatica" else "${it}p" }) {
-                receiver.configure(Configure(maxHeight = it))
+            val resolutions = current.choices.resolutions
+            if (resolutions != null) {
+                Dropdown(resolutions.map { it.maxHeight }, current.maxHeight, enabled, { h ->
+                    val choice = resolutions.first { it.maxHeight == h }
+                    "${choice.width}×${choice.height}" + if (choice.recommended) " (Consigliata)" else ""
+                }) { receiver.configure(Configure(maxHeight = it)) }
+            } else {
+                // A 0.2 PC: its own short list.
+                Chips(current.choices.maxHeights, current.maxHeight, enabled, { if (it == 0) "Automatica" else "${it}p" }) {
+                    receiver.configure(Configure(maxHeight = it))
+                }
+            }
+            val scales = current.choices.scales.orEmpty()
+            if (current.mode == StreamModes.EXTEND && scales.size > 1 && Features.SCALE in features) {
+                Section("SCALA DEL TESTO E DELLE FINESTRE")
+                Dropdown(scales, current.scale, enabled, { "$it%" }) { receiver.configure(Configure(scale = it)) }
+                Note("Come la scala di Windows: più alta ingrandisce testi e finestre su questo schermo.")
             }
             Section("FLUIDITÀ")
             Chips(current.choices.fps, current.fps, enabled, { "$it fps" }) { receiver.configure(Configure(fps = it)) }
@@ -109,18 +136,27 @@ fun SettingsPanel(
             Note("Se l'immagine scatta lontano dal router, prova 30 fps o una qualità più bassa.")
         }
 
-        Section("TOCCO")
+        Section("USARE IL PC DA QUI")
         if (Features.TOUCH in features) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("Usa il PC con il tocco", color = AltroveColors.Text, fontSize = 15.sp, modifier = Modifier.weight(1f))
-                Switch(checked = touchEnabled, onCheckedChange = receiver::setTouchEnabled)
+            val modes = buildList {
+                add(InputMode.TOUCH)
+                if (Features.MOUSE in features) add(InputMode.TRACKPAD)
+                add(InputMode.OFF)
             }
+            Chips(modes, inputMode, true, ::inputLabel, receiver::setInputMode)
             Note(
-                if (touchEnabled) "Un tocco è un clic, tenere premuto è il clic destro, due dita scorrono. Per riaprire questo pannello usa la linguetta a sinistra o il tasto Indietro."
-                else "Il tocco non arriva al PC: un tocco sullo schermo apre questo pannello.",
+                when (inputMode) {
+                    InputMode.TOUCH -> "Si clicca dove si tocca; tenere premuto è il clic destro; due dita scorrono."
+                    InputMode.TRACKPAD -> if (Features.MOUSE in features) {
+                        "Il dito muove il puntatore. Tocco: clic; tocco con due dita: clic destro; due dita: scorrere; doppio tocco tenendo giù: trascinare."
+                    } else {
+                        "Aggiorna Altrove sul PC per usare il trackpad."
+                    }
+                    InputMode.OFF -> "Il PC non riceve niente: un tocco sullo schermo apre questo pannello."
+                } + if (inputMode != InputMode.OFF) " Per tornare qui: linguetta a sinistra o tasto Indietro." else "",
             )
         } else {
-            Note("Il PC non accetta il tocco: si attiva in Altrove sul PC, prima di trasmettere.")
+            Note("Il PC non accetta tocco né trackpad: si attiva in Altrove sul PC, prima di trasmettere.")
         }
 
         Spacer(Modifier.height(12.dp))
@@ -129,8 +165,41 @@ fun SettingsPanel(
             modifier = Modifier.fillMaxWidth(),
             colors = ButtonDefaults.outlinedButtonColors(contentColor = AltroveColors.Danger),
         ) { Text("Interrompi la trasmissione") }
-        // Last, so its changing length never moves the controls under a finger.
-        if (stats.isNotEmpty()) Note(stats)
+    }
+}
+
+private fun inputLabel(mode: InputMode) = when (mode) {
+    InputMode.TOUCH -> "Tocco"
+    InputMode.TRACKPAD -> "Trackpad"
+    InputMode.OFF -> "Spento"
+}
+
+/** A drop-down list: the chosen value on a button that opens the others. Works with touch and with a TV remote. */
+@Composable
+private fun <T> Dropdown(values: List<T>, selected: T?, enabled: Boolean, label: (T) -> String, onPick: (T) -> Unit) {
+    var open by remember { mutableStateOf(false) }
+    Box {
+        OutlinedButton(onClick = { open = true }, enabled = enabled, modifier = Modifier.fillMaxWidth()) {
+            Text(selected?.let(label) ?: "Scegli…", modifier = Modifier.weight(1f), color = AltroveColors.Text)
+            Text("▾", color = AltroveColors.TextDim)
+        }
+        DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+            values.forEach { value ->
+                DropdownMenuItem(
+                    text = {
+                        Text(
+                            label(value),
+                            fontWeight = if (value == selected) FontWeight.SemiBold else FontWeight.Normal,
+                            color = if (value == selected) AltroveColors.Accent else AltroveColors.Text,
+                        )
+                    },
+                    onClick = {
+                        open = false
+                        if (value != selected) onPick(value)
+                    },
+                )
+            }
+        }
     }
 }
 
