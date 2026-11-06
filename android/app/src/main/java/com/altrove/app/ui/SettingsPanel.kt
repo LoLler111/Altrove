@@ -143,6 +143,7 @@ fun SettingsPanel(
 
         Section("USARE IL PC DA QUI")
         if (Features.TOUCH in features) {
+            if (settings?.touch == false) Note("Sul PC tocco e trackpad sono spenti: si riaccendono da Altrove sul PC.", AltroveColors.Danger)
             val modes = buildList {
                 add(InputMode.TOUCH)
                 if (Features.MOUSE in features) add(InputMode.TRACKPAD)
@@ -153,7 +154,7 @@ fun SettingsPanel(
                 when (inputMode) {
                     InputMode.TOUCH -> "Si clicca dove si tocca; tenere premuto è il clic destro; due dita scorrono."
                     InputMode.TRACKPAD -> if (Features.MOUSE in features) {
-                        "Il dito muove il puntatore. Tocco: clic; tocco con due dita: clic destro; due dita: scorrere; doppio tocco tenendo giù: trascinare."
+                        "Il dito muove il puntatore. Tocco: clic; doppio tocco: doppio clic; tocco con un secondo dito (anche tenendo giù il primo): clic destro; due dita insieme: scorrere; doppio tocco tenendo giù: trascinare."
                     } else {
                         "Aggiorna Altrove sul PC per usare il trackpad."
                     }

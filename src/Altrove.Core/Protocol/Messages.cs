@@ -177,7 +177,8 @@ public sealed record SettingsMessage(
     SettingsChoices Choices,
     string? Notice = null,
     int? Scale = null,
-    bool? Audio = null) : ControlMessage;
+    bool? Audio = null,
+    bool? Touch = null) : ControlMessage;
 
 /// <summary>A receiver's request to change some settings; null fields stay as they are.</summary>
 public sealed record ConfigureMessage(

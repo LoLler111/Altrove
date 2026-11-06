@@ -128,6 +128,7 @@ qualcosa cambia.
   correnti (`width`×`height` è quello che arriverà davvero), dalla più grande alla più piccola. `recommended` è la
   più grande che sta nello schermo del ricevitore. Con `resolutions`, `maxHeight` è quello della risoluzione in uso
   (mai `0`); il ricevitore la chiede con `configure` e `maxHeight`. `maxHeights` resta per i ricevitori 0.2.
+- `touch` (dalla 0.4): `false` se sul PC tocco e trackpad sono spenti (i messaggi `touch` e `mouse` vengono ignorati).
 - `scale` e `choices.scales` (dalla 0.3, funzione `scale`): la scala di Windows dello schermo virtuale in
   percentuale. Solo in `extend`; in `mirror` `scales` è vuoto e `scale` manca.
 
@@ -171,7 +172,8 @@ Il ricevitore come trackpad: i gesti li riconosce lui, il trasmettitore muove il
 - `scroll`: rotellina in scatti (anche frazionari); `dy` positivo scorre verso l'alto, `dx` positivo verso destra.
 
 Gesti del ricevitore Android: un dito muove; un tocco è un clic; un tocco con due dita è il clic destro; due
-dita che scorrono sono la rotellina; doppio tocco tenendo giù il secondo trascina.
+dita che scorrono sono la rotellina; doppio tocco tenendo giù il secondo trascina. Il tocco del secondo dito vale anche
+se il primo era appoggiato da prima o stava muovendo il puntatore.
 
 ### `audioStart` / `audioStop` — trasmettitore → ricevitore (funzione `audio`, dalla 0.4)
 ```json

@@ -122,7 +122,7 @@
         </Border>
 
         <!-- What and how -->
-        <ScrollViewer Grid.Row="1" Grid.Column="2" VerticalScrollBarVisibility="Auto" IsEnabled="{Binding IsIdle}">
+        <ScrollViewer Grid.Row="1" Grid.Column="2" VerticalScrollBarVisibility="Auto" IsEnabled="{Binding CanChangeChoices}">
             <StackPanel>
                 <Border Style="{StaticResource Card}">
                     <StackPanel>

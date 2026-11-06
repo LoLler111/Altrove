@@ -131,6 +131,7 @@ data class StreamSettings(
     val notice: String? = null,
     val scale: Int? = null,
     val audio: Boolean? = null,
+    val touch: Boolean? = null,
 ) : ControlMessage()
 
 /** A request to change some settings; null fields stay as they are. */

@@ -89,9 +89,90 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
         _sendAudio = _settings.SendAudio;
         SelectedReceiver = Receivers.FirstOrDefault(r => r.Id == _settings.LastReceiverId);
 
+        // While streaming, a choice made on the PC applies at once, like one from the receiver's panel.
+        foreach (var choice in MonitorChoices.Cast<ObservableObject>().Concat(ModeChoices).Concat(ResolutionChoices).Concat(FpsChoices).Concat(BitrateChoices))
+            choice.PropertyChanged += OnChoiceChanged;
+        ResolutionChoices.CollectionChanged += (_, e) =>
+        {
+            foreach (var added in e.NewItems?.OfType<ObservableObject>() ?? [])
+                added.PropertyChanged += OnChoiceChanged;
+        };
+
         _browser.Changed += found => Application.Current?.Dispatcher.BeginInvoke(() => Merge(found));
         _browser.Start();
         _ = CheckForUpdatesInBackgroundAsync();
+    }
+
+    // ---- Choices changed on the PC during a stream ----
+
+    /// <summary>The choices the running stream was started with.</summary>
+    private (string? Mode, string? Monitor, int Height, int Fps, int Mbps, bool Software)? _applied;
+
+    private (string? Mode, string? Monitor, int Height, int Fps, int Mbps, bool Software) CurrentChoices() =>
+        (Selected(ModeChoices), Selected(MonitorChoices)?.DeviceName, Selected(ResolutionChoices), Selected(FpsChoices), Selected(BitrateChoices), SoftwareEncoder);
+
+    /// <summary>Settings can be changed while idle and while streaming, not while connecting.</summary>
+    public bool CanChangeChoices => State != SessionState.Connecting;
+
+    private void OnChoiceChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName == "IsSelected")
+            QueueLocalChange();
+    }
+
+    // After the current event: one change of chip unselects one and selects another.
+    private void QueueLocalChange()
+    {
+        if (State == SessionState.Streaming)
+            Application.Current?.Dispatcher.BeginInvoke(() => _ = ApplyLocalChangesAsync());
+    }
+
+    private async Task ApplyLocalChangesAsync()
+    {
+        await _reconfiguring.WaitAsync();
+        try
+        {
+            if (_session is not { } session || State != SessionState.Streaming || _applied is not { } applied || CurrentChoices() == applied)
+                return;
+            if (IsExtend && !await EnsureVirtualDisplayDriverAsync())
+            {
+                RestoreChoices(applied);
+                return;
+            }
+            SaveChoices();
+            try
+            {
+                await StartStreamAsync(session, CancellationToken.None);
+            }
+            catch (Exception ex) when (ex is InvalidOperationException or OperationCanceledException
+                or SharpGen.Runtime.SharpGenException or System.Runtime.InteropServices.COMException)
+            {
+                RestoreChoices(applied);
+                SaveChoices();
+                await StartStreamAsync(session, CancellationToken.None);
+                ShowError($"Non sono riuscito a cambiare: {ex.Message}");
+            }
+        }
+        catch (Exception ex)
+        {
+            App.Log($"Cambio impostazioni dal PC fallito: {ex}");
+            await StopAsync(null);
+            ShowError($"La trasmissione si è fermata cambiando le impostazioni: {ex.Message}");
+        }
+        finally
+        {
+            _reconfiguring.Release();
+        }
+    }
+
+    private void RestoreChoices((string? Mode, string? Monitor, int Height, int Fps, int Mbps, bool Software) choices)
+    {
+        Select(ModeChoices, ModeChoices.FirstOrDefault(c => c.Value == choices.Mode));
+        Select(MonitorChoices, MonitorChoices.FirstOrDefault(c => c.Value.DeviceName == choices.Monitor));
+        SelectHeight(choices.Height);
+        Select(FpsChoices, FpsChoices.FirstOrDefault(c => c.Value == choices.Fps));
+        Select(BitrateChoices, BitrateChoices.FirstOrDefault(c => c.Value == choices.Mbps));
+        SoftwareEncoder = choices.Software;
     }
 
     // ---- Updates (Velopack, from the GitHub releases) ----
@@ -165,7 +246,7 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
     private string _manualAddress = "";
 
     [ObservableProperty]
-    [NotifyPropertyChangedFor(nameof(StartStopLabel), nameof(IsIdle))]
+    [NotifyPropertyChangedFor(nameof(StartStopLabel), nameof(IsIdle), nameof(CanChangeChoices))]
     [NotifyCanExecuteChangedFor(nameof(StartStopCommand))]
     private SessionState _state = SessionState.Idle;
 
@@ -199,6 +280,7 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
     {
         _settings.SoftwareEncoder = value;
         _settings.Save();
+        QueueLocalChange();
     }
 
     /// <summary>The receiver may work the PC by touch (taps become clicks on the streamed screen).</summary>
@@ -213,6 +295,15 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
     {
         _settings.SendAudio = value;
         _settings.Save();
+        // While streaming, from the PC or from the receiver's panel: on or off at once.
+        if (_session is { } session && State == SessionState.Streaming)
+        {
+            if (value)
+                StartAudio(session);
+            else
+                StopAudio(session);
+            session.SendSettings(CurrentSettings(null));
+        }
     }
 
     private LoopbackAudio? _audio;
@@ -256,6 +347,14 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
     {
         _settings.AllowTouch = value;
         _settings.Save();
+        if (!value && _streamTarget is { } target)
+        {
+            // Fingers still down, or a button held by a trackpad drag, would stay pressed.
+            _touch?.SetTarget(target);
+            _mouse?.ReleaseButtons();
+        }
+        if (_session is { } session && State == SessionState.Streaming)
+            session.SendSettings(CurrentSettings(null));
     }
 
     private static void Select<T>(IEnumerable<Choice<T>> choices, Choice<T>? chosen)
@@ -377,8 +476,8 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
         try
         {
             List<string> features = [Features.Configure, Features.Scale, Features.Audio];
-            if (AllowTouch)
-                features.AddRange([Features.Touch, Features.Mouse]);
+            // Always offered: the PC's check box can turn them on and off during the stream.
+            features.AddRange([Features.Touch, Features.Mouse]);
             var self = new HelloMessage(AltroveProtocol.Version, Roles.Sender, _settings.DeviceId, Environment.MachineName,
                 typeof(MainViewModel).Assembly.GetName().Version?.ToString(3), Features: features);
             var session = await SenderSession.ConnectAsync(ReceiverAddress.ToUri(receiver.Host, receiver.Port), self, _connecting.Token);
@@ -387,7 +486,6 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
             session.StatsUpdated += OnStats;
             session.Closed += why => Application.Current?.Dispatcher.BeginInvoke(() => _ = StopAsync(why));
             session.ConfigureRequested += request => Application.Current?.Dispatcher.BeginInvoke(() => _ = ConfigureAsync(request));
-            if (AllowTouch)
             {
                 try
                 {
@@ -434,9 +532,17 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
     private MouseInjector? _mouse;
     private MonitorInfo? _streamTarget;
 
-    private void OnTouch(TouchMessage touch) => _touch?.Inject(touch);
+    private void OnTouch(TouchMessage touch)
+    {
+        if (AllowTouch)
+            _touch?.Inject(touch);
+    }
 
-    private void OnMouse(MouseMessage mouse) => _mouse?.Inject(mouse);
+    private void OnMouse(MouseMessage mouse)
+    {
+        if (AllowTouch)
+            _mouse?.Inject(mouse);
+    }
 
     /// <summary>Selects the resolution chip for <paramref name="height"/>, adding one if a receiver picked a height the PC does not list.</summary>
     private void SelectHeight(int height)
@@ -526,6 +632,7 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
         _touch?.SetTarget(target);
         _mouse?.SetTarget(target);
         _streamTarget = target;
+        _applied = CurrentChoices();
         session.SendSettings(CurrentSettings(null));
         Status = extend
             ? $"{_receiverName} è un nuovo schermo a destra degli altri: {width}×{height}, {fps} fps · {source.EncoderName}"
@@ -578,7 +685,8 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
                 scales),
             notice,
             scale,
-            AudioCodecFor(_session) is null ? null : _audio is not null);
+            AudioCodecFor(_session) is null ? null : _audio is not null,
+            AllowTouch);
     }
 
     /// <summary>The receiver asked for other settings: apply them to the running stream, or put the old ones back.</summary>
@@ -629,14 +737,8 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
             var after = (Mode: Selected(ModeChoices), Monitor: Selected(MonitorChoices), Height: Selected(ResolutionChoices),
                 Fps: Selected(FpsChoices), Mbps: Selected(BitrateChoices));
             // Sound on or off changes nothing else.
-            if (request.Audio is { } wantAudio && wantAudio != (_audio is not null))
-            {
-                SendAudio = wantAudio;
-                if (wantAudio)
-                    StartAudio(session);
-                else
-                    StopAudio(session);
-            }
+            if (request.Audio is { } wantAudio)
+                SendAudio = wantAudio; // OnSendAudioChanged turns it on or off
 
             if (after == before)
             {
@@ -716,6 +818,7 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
         _touch?.Dispose();
         _touch = null;
         _mouse = null;
+        _applied = null;
         _audio?.Dispose();
         _audio = null;
         _streamTarget = null;

@@ -96,7 +96,8 @@ Con «Usa il PC dal ricevitore (tocco e trackpad)» attivo sul PC, nel pannello 
 - **Tocco**: si clicca dove si tocca; tenere premuto è il clic destro, trascinare sposta, due dita scorrono dove
   l'applicazione lo gestisce.
 - **Trackpad**: come quello di un portatile. Il dito muove il puntatore (che resta sullo schermo trasmesso), un tocco
-  è un clic, un tocco con due dita è il clic destro, due dita scorrono, doppio tocco tenendo giù trascina.
+  è un clic, un doppio tocco è il doppio clic, un tocco con un secondo dito (anche tenendo giù il primo) è il clic
+  destro, due dita insieme scorrono, doppio tocco tenendo giù trascina.
 - **Spento**: il PC non riceve niente.
 
 Funziona in Duplica e in Estendi, anche su PC senza schermo touch. Windows non lascia toccare le finestre aperte come
@@ -105,6 +106,9 @@ amministratore né le richieste di permesso (UAC).
 **Audio**: con «Manda l'audio del PC al ricevitore» quello che il PC sta suonando (tutto il suono di Windows) si sente
 anche sul tablet, compresso in Opus (~128 kbit/s); il volume è quello del tablet. Si accende e si spegne anche dal
 pannello. Il PC continua a suonare anche dalle sue casse.
+
+Le stesse scelte (modalità, schermo, risoluzione, fluidità, qualità, encoder, audio, tocco) si possono cambiare anche
+dall'app sul PC mentre trasmette: si applicano subito e il pannello del tablet si aggiorna.
 
 **Pannello**: la linguetta sul bordo sinistro, o il tasto Indietro, apre il pannello. In alto risoluzione, fps,
 Mbit/s ricevuti e tempo di decodifica. Da lì si cambiano senza staccarsi modalità, schermo, fluidità, qualità e

@@ -30,6 +30,10 @@ class TrackpadGestures(
     private var secondTap = false
     private var lastTapUp = 0L
 
+    // A second finger joining the first: a right click if it taps, a scroll if both fingers move.
+    private var secondFingerDown = 0L
+    private var rightClicked = false
+
     /** When [onTimeout] must run to deliver a waiting click; null when nothing waits. */
     var deadline: Long? = null
         private set
@@ -61,11 +65,15 @@ class TrackpadGestures(
                 moved = false
                 maxPointers = 1
                 dragging = false
+                rightClicked = false
             }
             MotionEvent.ACTION_POINTER_DOWN -> {
                 maxPointers = maxOf(maxPointers, xs.size)
+                // From here on: a scroll only if the two fingers move together, past the slop.
                 val (x, y) = average(xs, ys)
                 startX = x; startY = y; lastX = x; lastY = y
+                moved = false
+                if (xs.size == 2) secondFingerDown = time
             }
             MotionEvent.ACTION_MOVE -> {
                 val (x, y) = if (xs.size >= 2) average(xs, ys) else xs[0] to ys[0]
@@ -82,25 +90,33 @@ class TrackpadGestures(
                     if (xs.size >= 2) {
                         // Natural scrolling: the content follows the fingers.
                         if (dx != 0f || dy != 0f) out += Mouse(MouseActions.SCROLL, dx = round(-dx / notchPx), dy = round(dy / notchPx))
-                    } else if (maxPointers == 1 && (dx != 0f || dy != 0f)) {
+                    } else if (dx != 0f || dy != 0f) {
                         out += Mouse(MouseActions.MOVE, dx = round(dx / width * sensitivity), dy = round(dy / height * sensitivity))
                     }
                 }
                 lastX = x; lastY = y
             }
             MotionEvent.ACTION_POINTER_UP -> {
-                // The fingers left keep going from where they are, without a jump.
+                // A second finger that touched and left at once, with the fingers still: the right button. The first
+                // finger may have been resting there, or moving the pointer, for any time before.
+                if (xs.size == 2 && !moved && !rightClicked && !dragging && time - secondFingerDown < 2 * tapMs) {
+                    out += Mouse(MouseActions.CLICK, button = MouseButtons.RIGHT)
+                    rightClicked = true
+                }
+                // The finger left keeps going from where it is, without a jump, once it moves past the slop again.
                 val left = xs.indices.filter { it != actionIndex }
                 if (left.isNotEmpty()) {
-                    lastX = left.map { xs[it] }.average().toFloat()
-                    lastY = left.map { ys[it] }.average().toFloat()
+                    val x = left.map { xs[it] }.average().toFloat()
+                    val y = left.map { ys[it] }.average().toFloat()
+                    startX = x; startY = y; lastX = x; lastY = y
+                    moved = false
                 }
             }
             MotionEvent.ACTION_UP -> {
                 val quick = time - downTime < tapMs
                 when {
                     dragging -> out += Mouse(MouseActions.UP, button = MouseButtons.LEFT)
-                    maxPointers >= 2 -> if (!moved && time - downTime < 2 * tapMs) out += Mouse(MouseActions.CLICK, button = MouseButtons.RIGHT)
+                    maxPointers >= 2 -> Unit // its right click, if any, came when the second finger left
                     !moved && quick && secondTap -> {
                         out += Mouse(MouseActions.CLICK, button = MouseButtons.LEFT)
                         out += Mouse(MouseActions.CLICK, button = MouseButtons.LEFT)

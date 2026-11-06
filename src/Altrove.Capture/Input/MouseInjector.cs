@@ -13,6 +13,7 @@ public sealed class MouseInjector
     private readonly object _lock = new();
     private (int Left, int Top, int Width, int Height) _target;
     private double _restX, _restY, _wheelRestX, _wheelRestY;
+    private readonly HashSet<string> _pressed = [];
 
     public MouseInjector(MonitorInfo target) => SetTarget(target);
 
@@ -78,8 +79,23 @@ public sealed class MouseInjector
             Send(new MouseInput { Flags = MouseMove }); // a zero move, so apps see the pointer moved (hover)
     }
 
+    /// <summary>Lets go of any button a trackpad drag left pressed.</summary>
+    public void ReleaseButtons()
+    {
+        lock (_lock)
+        {
+            foreach (var button in _pressed.ToList())
+                Button(button, down: false);
+        }
+    }
+
     private void Button(string? button, bool down)
     {
+        var key = button ?? MouseButtons.Left;
+        if (down)
+            _pressed.Add(key);
+        else
+            _pressed.Remove(key);
         var flags = button switch
         {
             MouseButtons.Right => down ? RightDown : RightUp,

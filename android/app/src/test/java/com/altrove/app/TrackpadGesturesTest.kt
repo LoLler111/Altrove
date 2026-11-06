@@ -23,6 +23,7 @@ class TrackpadGesturesTest {
         onEvent(action, index, floatArrayOf(x, x + 100), floatArrayOf(y, y), t, w, h)
 
     private val leftClick = Mouse(MouseActions.CLICK, button = MouseButtons.LEFT)
+    private val rightClick = Mouse(MouseActions.CLICK, button = MouseButtons.RIGHT)
 
     @Test
     fun a_tap_clicks_once_its_double_tap_window_is_over() {
@@ -51,8 +52,8 @@ class TrackpadGesturesTest {
         val pad = pad()
         pad.one(ACTION_DOWN, 100f, 100f, 0)
         pad.two(ACTION_POINTER_DOWN, 1, 100f, 100f, 20)
-        pad.two(ACTION_POINTER_UP, 1, 100f, 100f, 120)
-        assertEquals(listOf(Mouse(MouseActions.CLICK, button = MouseButtons.RIGHT)), pad.one(ACTION_UP, 100f, 100f, 130))
+        assertEquals(listOf(rightClick), pad.two(ACTION_POINTER_UP, 1, 100f, 100f, 120))
+        assertTrue(pad.one(ACTION_UP, 100f, 100f, 130).isEmpty())
 
         val scroll = pad()
         scroll.one(ACTION_DOWN, 100f, 100f, 1000)
@@ -85,5 +86,30 @@ class TrackpadGesturesTest {
         late.one(ACTION_DOWN, 100f, 100f, 0)
         late.one(ACTION_UP, 100f, 100f, 60)
         assertEquals(listOf(leftClick), late.one(ACTION_DOWN, 100f, 100f, 900)) // too late for a double tap
+    }
+
+    @Test
+    fun a_second_finger_tap_right_clicks_while_the_first_rests_or_moves() {
+        // The first finger rests for a second, then a second finger taps: like a laptop trackpad.
+        val resting = pad()
+        resting.one(ACTION_DOWN, 100f, 100f, 0)
+        resting.two(ACTION_POINTER_DOWN, 1, 100f, 100f, 1000)
+        assertEquals(listOf(rightClick), resting.two(ACTION_POINTER_UP, 1, 100f, 100f, 1120))
+        assertTrue(resting.one(ACTION_UP, 100f, 100f, 1500).isEmpty())
+
+        // The first finger moves the pointer, a second finger taps, then the first goes on moving it.
+        val moving = pad()
+        moving.one(ACTION_DOWN, 100f, 100f, 0)
+        moving.one(ACTION_MOVE, 200f, 100f, 50)
+        moving.two(ACTION_POINTER_DOWN, 1, 200f, 100f, 100)
+        assertEquals(listOf(rightClick), moving.two(ACTION_POINTER_UP, 1, 200f, 100f, 200))
+        moving.one(ACTION_MOVE, 215f, 100f, 220) // past the slop again
+        assertEquals(listOf(Mouse(MouseActions.MOVE, dx = 0.1, dy = 0.0)), moving.one(ACTION_MOVE, 315f, 100f, 240))
+
+        // A second finger held long is not a click.
+        val held = pad()
+        held.one(ACTION_DOWN, 100f, 100f, 0)
+        held.two(ACTION_POINTER_DOWN, 1, 100f, 100f, 100)
+        assertTrue(held.two(ACTION_POINTER_UP, 1, 100f, 100f, 900).isEmpty())
     }
 }
