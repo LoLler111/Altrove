@@ -1,6 +1,7 @@
 using System.Collections.ObjectModel;
 using System.Windows;
 using Altrove.Capture;
+using Altrove.Capture.Audio;
 using Altrove.Capture.Input;
 using Altrove.Capture.VirtualDisplay;
 using Altrove.Core.Discovery;
@@ -85,6 +86,7 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
 
         _softwareEncoder = _settings.SoftwareEncoder;
         _allowTouch = _settings.AllowTouch;
+        _sendAudio = _settings.SendAudio;
         SelectedReceiver = Receivers.FirstOrDefault(r => r.Id == _settings.LastReceiverId);
 
         _browser.Changed += found => Application.Current?.Dispatcher.BeginInvoke(() => Merge(found));
@@ -202,6 +204,53 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
     /// <summary>The receiver may work the PC by touch (taps become clicks on the streamed screen).</summary>
     [ObservableProperty]
     private bool _allowTouch;
+
+    /// <summary>The PC's sound goes to the receiver too (if it can play it).</summary>
+    [ObservableProperty]
+    private bool _sendAudio;
+
+    partial void OnSendAudioChanged(bool value)
+    {
+        _settings.SendAudio = value;
+        _settings.Save();
+    }
+
+    private LoopbackAudio? _audio;
+
+    /// <summary>The format this receiver plays best, or null if it plays none (older receivers).</summary>
+    private static string? AudioCodecFor(SenderSession? session) =>
+        session is null ? null
+        : session.ReceiverPlays(AudioCodecs.Opus) ? AudioCodecs.Opus
+        : session.ReceiverPlays(AudioCodecs.Pcm) ? AudioCodecs.Pcm
+        : null;
+
+    private void StartAudio(SenderSession session)
+    {
+        if (_audio is not null || AudioCodecFor(session) is not { } codec)
+            return;
+        try
+        {
+            var audio = new LoopbackAudio(codec);
+            session.StartAudio(audio.Format);
+            audio.PacketReady += (packet, time) => session.SendAudio(packet, time);
+            audio.Failed += ex => App.Log($"Audio interrotto: {ex.Message}");
+            audio.Start();
+            _audio = audio;
+            App.Log($"Audio acceso: {codec}, da «{audio.DeviceName}».");
+        }
+        catch (Exception ex) when (ex is System.Runtime.InteropServices.COMException or InvalidOperationException)
+        {
+            App.Log($"Audio non disponibile: {ex.Message}");
+        }
+    }
+
+    private void StopAudio(SenderSession session)
+    {
+        App.Log($"Audio spento (era {(_audio is null ? "già spento" : "acceso")}).");
+        _audio?.Dispose();
+        _audio = null;
+        session.StopAudio();
+    }
 
     partial void OnAllowTouchChanged(bool value)
     {
@@ -327,7 +376,7 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
         _connecting = new CancellationTokenSource();
         try
         {
-            List<string> features = [Features.Configure, Features.Scale];
+            List<string> features = [Features.Configure, Features.Scale, Features.Audio];
             if (AllowTouch)
                 features.AddRange([Features.Touch, Features.Mouse]);
             var self = new HelloMessage(AltroveProtocol.Version, Roles.Sender, _settings.DeviceId, Environment.MachineName,
@@ -354,6 +403,11 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
             }
 
             await StartStreamAsync(session, _connecting.Token);
+            if (SendAudio)
+            {
+                StartAudio(session);
+                session.SendSettings(CurrentSettings(null)); // the first settings went out before the sound was on
+            }
             State = SessionState.Streaming;
         }
         catch (OperationCanceledException) when (_connecting?.IsCancellationRequested == true)
@@ -523,7 +577,8 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
                 resolutions,
                 scales),
             notice,
-            scale);
+            scale,
+            AudioCodecFor(_session) is null ? null : _audio is not null);
     }
 
     /// <summary>The receiver asked for other settings: apply them to the running stream, or put the old ones back.</summary>
@@ -573,6 +628,16 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
 
             var after = (Mode: Selected(ModeChoices), Monitor: Selected(MonitorChoices), Height: Selected(ResolutionChoices),
                 Fps: Selected(FpsChoices), Mbps: Selected(BitrateChoices));
+            // Sound on or off changes nothing else.
+            if (request.Audio is { } wantAudio && wantAudio != (_audio is not null))
+            {
+                SendAudio = wantAudio;
+                if (wantAudio)
+                    StartAudio(session);
+                else
+                    StopAudio(session);
+            }
+
             if (after == before)
             {
                 session.SendSettings(CurrentSettings(notice));
@@ -651,6 +716,8 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
         _touch?.Dispose();
         _touch = null;
         _mouse = null;
+        _audio?.Dispose();
+        _audio = null;
         _streamTarget = null;
         if (source is not null)
             await source.DisposeAsync();

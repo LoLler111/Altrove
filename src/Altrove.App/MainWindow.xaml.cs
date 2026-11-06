@@ -26,7 +26,8 @@ public partial class MainWindow : Window
         e.Cancel = true;
         _closing = true;
         await _model.DisposeAsync();
-        Close();
+        // DisposeAsync may finish at once, while this Closing is still running: close again only after it.
+        _ = Dispatcher.BeginInvoke(Close);
     }
 
     private void UseDarkTitleBar()

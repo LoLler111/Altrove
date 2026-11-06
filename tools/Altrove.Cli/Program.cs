@@ -39,6 +39,7 @@ try
         "vdd-detach" => VddDetach(),
         "touch" => await Touch(options, args.Contains("--seconds")),
         "scale" => Scale(options),
+        "audio" => await AudioTest(options),
         "stress" => await Stress(options),
         _ => Usage(),
     };
@@ -152,6 +153,64 @@ static int Scale(Options options)
         return 1;
     }
     Console.WriteLine($"{monitor.DisplayName} ({monitor.DeviceName}): {scale.Current}%, possibili {string.Join(", ", scale.Available)}");
+    return 0;
+}
+
+static async Task<int> AudioTest(Options options)
+{
+    // altrove-cli audio [pcm] --seconds 5: captures what the PC plays as the receiver would get it, decodes it back
+    // and saves altrove-audio.wav to listen to.
+    var codec = options.Positional ?? Altrove.Core.Protocol.AudioCodecs.Opus;
+    using var audio = new Altrove.Capture.Audio.LoopbackAudio(codec);
+    var packets = new List<byte[]>();
+    audio.PacketReady += (packet, _) => { lock (packets) packets.Add(packet); };
+    audio.Failed += ex => Console.Error.WriteLine($"Errore audio: {ex.Message}");
+    audio.Start();
+    Console.WriteLine($"Registro l'audio di «{audio.DeviceName}» per {options.Seconds} s ({codec})…");
+    await Task.Delay(TimeSpan.FromSeconds(options.Seconds));
+    audio.Dispose();
+    int atStop;
+    lock (packets)
+        atStop = packets.Count;
+    await Task.Delay(1500); // nothing may come after the stop
+
+    byte[][] copy;
+    lock (packets)
+        copy = packets.ToArray();
+    if (copy.Length > atStop)
+        Console.WriteLine($"ATTENZIONE: {copy.Length - atStop} pacchetti arrivati dopo lo stop");
+    var bytes = copy.Sum(p => (long)p.Length);
+    Console.WriteLine($"Pacchetti: {copy.Length} ({copy.Length * 10 / 1000.0:0.0} s di suono), {bytes / 1024} KiB, {bytes * 8 / 1000.0 / Math.Max(1, options.Seconds):0} kbit/s");
+    if (copy.Length == 0)
+    {
+        Console.WriteLine("Nessun suono: fai suonare qualcosa sul PC durante la prova.");
+        return 1;
+    }
+    var pcm = new List<short>();
+    var decoder = Concentus.OpusCodecFactory.CreateDecoder(48000, 2);
+    var buffer = new short[960 * 2];
+    foreach (var packet in copy)
+    {
+        if (codec == Altrove.Core.Protocol.AudioCodecs.Opus)
+        {
+            var samples = decoder.Decode(packet, buffer, 960);
+            pcm.AddRange(buffer.AsSpan(0, samples * 2).ToArray());
+        }
+        else
+        {
+            for (var i = 0; i + 1 < packet.Length; i += 2)
+                pcm.Add(BitConverter.ToInt16(packet, i));
+        }
+    }
+    var rms = Math.Sqrt(pcm.Average(s => (double)s * s)) / 32768;
+    Console.WriteLine($"Ridecodificati {pcm.Count / 2} campioni per canale, livello medio {20 * Math.Log10(Math.Max(rms, 1e-9)):0.0} dBFS");
+    using (var writer = new NAudio.Wave.WaveFileWriter("altrove-audio.wav", new NAudio.Wave.WaveFormat(48000, 16, 2)))
+    {
+        var raw = new byte[pcm.Count * 2];
+        Buffer.BlockCopy(pcm.ToArray(), 0, raw, 0, raw.Length);
+        writer.Write(raw, 0, raw.Length);
+    }
+    Console.WriteLine($"Salvato {Path.GetFullPath("altrove-audio.wav")}");
     return 0;
 }
 

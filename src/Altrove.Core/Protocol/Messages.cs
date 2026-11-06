@@ -28,6 +28,8 @@ public sealed record DisplayInfo(int Width, int Height, double RefreshRate);
 [JsonDerivedType(typeof(ConfigureMessage), "configure")]
 [JsonDerivedType(typeof(TouchMessage), "touch")]
 [JsonDerivedType(typeof(MouseMessage), "mouse")]
+[JsonDerivedType(typeof(AudioStartMessage), "audioStart")]
+[JsonDerivedType(typeof(AudioStopMessage), "audioStop")]
 public abstract record ControlMessage
 {
     private static readonly JsonSerializerOptions Options = new(JsonSerializerDefaults.Web)
@@ -54,7 +56,7 @@ public abstract record ControlMessage
     }
 
     private static readonly HashSet<string> KnownTypes =
-        ["hello", "start", "stop", "keyframe", "ping", "pong", "stats", "bye", "settings", "configure", "touch", "mouse"];
+        ["hello", "start", "stop", "keyframe", "ping", "pong", "stats", "bye", "settings", "configure", "touch", "mouse", "audioStart", "audioStop"];
 }
 
 public static class Roles
@@ -83,6 +85,9 @@ public static class Features
 
     /// <summary>In extend mode the receiver may choose the virtual monitor's scale.</summary>
     public const string Scale = "scale";
+
+    /// <summary>The sender streams the PC's sound (to receivers with audioCodecs) and accepts configure.audio.</summary>
+    public const string Audio = "audio";
 }
 
 public static class TouchStates
@@ -127,7 +132,8 @@ public sealed record HelloMessage(
     IReadOnlyList<string>? Codecs = null,
     int? MaxWidth = null,
     int? MaxHeight = null,
-    IReadOnlyList<string>? Features = null) : ControlMessage
+    IReadOnlyList<string>? Features = null,
+    IReadOnlyList<string>? AudioCodecs = null) : ControlMessage
 {
     public bool Supports(string feature) => Features?.Contains(feature) == true;
 }
@@ -170,7 +176,8 @@ public sealed record SettingsMessage(
     int BitrateKbps,
     SettingsChoices Choices,
     string? Notice = null,
-    int? Scale = null) : ControlMessage;
+    int? Scale = null,
+    bool? Audio = null) : ControlMessage;
 
 /// <summary>A receiver's request to change some settings; null fields stay as they are.</summary>
 public sealed record ConfigureMessage(
@@ -179,7 +186,8 @@ public sealed record ConfigureMessage(
     int? MaxHeight = null,
     int? Fps = null,
     int? BitrateKbps = null,
-    int? Scale = null) : ControlMessage;
+    int? Scale = null,
+    bool? Audio = null) : ControlMessage;
 
 /// <summary>One finger on the receiver's screen, at a position on the streamed image from 0 to 1.</summary>
 public sealed record TouchPointer(int Id, double X, double Y, string State);
@@ -189,3 +197,14 @@ public sealed record TouchMessage(IReadOnlyList<TouchPointer> Pointers) : Contro
 
 /// <summary>The receiver as a trackpad: a relative move (fractions of the image), a button, or the wheel (notches).</summary>
 public sealed record MouseMessage(string Action, double? Dx = null, double? Dy = null, string? Button = null) : ControlMessage;
+
+public static class AudioCodecs
+{
+    public const string Opus = "opus";
+    public const string Pcm = "pcm";
+}
+
+/// <summary>Audio packets (binary kind 2) in this format follow, until audioStop or another audioStart.</summary>
+public sealed record AudioStartMessage(string Codec, int SampleRate, int Channels, int FrameMs) : ControlMessage;
+
+public sealed record AudioStopMessage : ControlMessage;

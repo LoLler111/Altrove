@@ -5,9 +5,12 @@ import android.media.MediaCodecList
 import android.media.MediaFormat
 import android.os.Build
 import android.provider.Settings
+import android.util.Log
 import android.view.Surface
 import com.altrove.app.BuildConfig
 import com.altrove.app.protocol.AltroveProtocol
+import com.altrove.app.protocol.AudioStart
+import com.altrove.app.protocol.AudioStop
 import com.altrove.app.protocol.Bye
 import com.altrove.app.protocol.Configure
 import com.altrove.app.protocol.Features
@@ -146,6 +149,7 @@ class ReceiverController(private val context: Context) : ReceiverServer.Listener
     }
 
     fun stop() {
+        releaseAudio()
         advertiser.stop()
         statsJob?.cancel()
         server?.let {
@@ -210,6 +214,7 @@ class ReceiverController(private val context: Context) : ReceiverServer.Listener
             codecs = listOf("h264"),
             maxWidth = maxStreamSize().first,
             maxHeight = maxStreamSize().second,
+            audioCodecs = audioCodecs,
         )
         connection.send(Messages.encode(hello))
     }
@@ -243,6 +248,14 @@ class ReceiverController(private val context: Context) : ReceiverServer.Listener
                 _state.value = ReceiverState.Connected(senderName)
             }
             is Ping -> connection.send(Messages.encode(Pong(message.t)))
+            is AudioStart -> synchronized(lock) {
+                player?.release()
+                player = runCatching { AudioPlayer(message) }.onFailure { Log.w("AltroveAudio", "No audio", it) }.getOrNull()
+            }
+            is AudioStop -> synchronized(lock) {
+                player?.release()
+                player = null
+            }
             is StreamSettings -> {
                 _settings.value = message
                 applyingJob?.cancel()
@@ -254,6 +267,17 @@ class ReceiverController(private val context: Context) : ReceiverServer.Listener
     }
 
     private val receivedBytes = java.util.concurrent.atomic.AtomicLong()
+    private var player: AudioPlayer? = null
+    private val audioCodecs by lazy { AudioPlayer.supportedCodecs() }
+
+    override fun onAudio(connection: WebSocket, data: ByteArray, offset: Int, length: Int) {
+        synchronized(lock) { player }?.submit(data, offset, length)
+    }
+
+    private fun releaseAudio() = synchronized(lock) {
+        player?.release()
+        player = null
+    }
 
     override fun onVideo(connection: WebSocket, packet: VideoPacket) {
         receivedBytes.addAndGet(packet.length.toLong())
@@ -261,6 +285,7 @@ class ReceiverController(private val context: Context) : ReceiverServer.Listener
     }
 
     override fun onSenderDisconnected(connection: WebSocket) {
+        releaseAudio()
         statsJob?.cancel()
         applyingJob?.cancel()
         _applying.value = false
@@ -284,7 +309,8 @@ class ReceiverController(private val context: Context) : ReceiverServer.Listener
                 val (frames, dropped, decodeMs) = decoder.takeStats()
                 server?.send(Stats(frames.toDouble(), decodeMs, dropped))
                 val mbps = receivedBytes.getAndSet(0) * 8 / 1_000_000.0
-                _stats.value = "$frames fps · ${"%.1f".format(mbps)} Mbit/s · decodifica ${"%.0f".format(decodeMs)} ms" +
+                val sound = synchronized(lock) { player }?.let { " · audio" } ?: ""
+                _stats.value = "$frames fps · ${"%.1f".format(mbps)} Mbit/s$sound · decodifica ${"%.0f".format(decodeMs)} ms" +
                     (decoder.decoderName?.let { " · $it" } ?: "")
             }
         }

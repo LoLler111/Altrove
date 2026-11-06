@@ -24,6 +24,7 @@ class ReceiverServer(
         fun onSenderConnected(connection: WebSocket)
         fun onControl(connection: WebSocket, message: ControlMessage)
         fun onVideo(connection: WebSocket, packet: VideoPacket)
+        fun onAudio(connection: WebSocket, data: ByteArray, offset: Int, length: Int)
         fun onSenderDisconnected(connection: WebSocket)
         fun onServerStarted(port: Int)
         fun onServerError(error: Exception)
@@ -70,6 +71,12 @@ class ReceiverServer(
 
     override fun onMessage(connection: WebSocket, message: ByteBuffer) {
         if (connection !== active) return
+        if (message.remaining() > VideoPacket.HEADER_SIZE && message.get(message.position()).toInt() == VideoPacket.KIND_AUDIO) {
+            val bytes = ByteArray(message.remaining())
+            message.get(bytes)
+            listener.onAudio(connection, bytes, VideoPacket.HEADER_SIZE, bytes.size - VideoPacket.HEADER_SIZE)
+            return
+        }
         VideoPacket.parse(message)?.let { listener.onVideo(connection, it) }
     }
 

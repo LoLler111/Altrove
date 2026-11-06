@@ -48,10 +48,11 @@ Il ricevitore risponde con il suo `hello`, che dice anche cosa sa mostrare:
 ```json
 { "type": "hello", "protocol": 1, "role": "receiver", "id": "…", "name": "Tab A", "app": "0.1.0",
   "display": { "width": 1920, "height": 1200, "refreshRate": 60 },
-  "codecs": ["h264"], "maxWidth": 1920, "maxHeight": 1080 }
+  "codecs": ["h264"], "maxWidth": 1920, "maxHeight": 1080, "audioCodecs": ["opus", "pcm"] }
 ```
 - `display`: risoluzione dello schermo del ricevitore, in pixel reali.
 - `maxWidth` / `maxHeight`: il flusso più grande che il decoder regge (in orizzontale).
+- `audioCodecs` (dalla 0.4): i formati audio che il ricevitore sa riprodurre; senza, niente audio.
 
 Se `protocol` dell'altro è diverso dal proprio, si chiude con `bye` e `reason: "protocol"`.
 
@@ -67,6 +68,7 @@ Nel proprio `hello` ciascun lato può elencare le funzioni facoltative che gesti
 | `configure` | trasmettitore | manda `settings` e accetta `configure`: il ricevitore può cambiare modalità e qualità |
 | `mouse` | trasmettitore | accetta i messaggi `mouse`: il ricevitore fa da trackpad (dalla 0.3) |
 | `scale` | trasmettitore | in `extend` il ricevitore può scegliere la scala (DPI) dello schermo virtuale (dalla 0.3) |
+| `audio` | trasmettitore | manda l'audio del PC (se il ricevitore ha `audioCodecs`) e accetta `configure` con `audio` (dalla 0.4) |
 
 Un messaggio facoltativo si manda solo se l'altro lato ha annunciato la funzione. Chi non manda
 `features` (le versioni 0.1) non ne gestisce nessuna. Le funzioni nuove non cambiano `protocol`.
@@ -171,24 +173,41 @@ Il ricevitore come trackpad: i gesti li riconosce lui, il trasmettitore muove il
 Gesti del ricevitore Android: un dito muove; un tocco è un clic; un tocco con due dita è il clic destro; due
 dita che scorrono sono la rotellina; doppio tocco tenendo giù il secondo trascina.
 
+### `audioStart` / `audioStop` — trasmettitore → ricevitore (funzione `audio`, dalla 0.4)
+```json
+{ "type": "audioStart", "codec": "opus", "sampleRate": 48000, "channels": 2, "frameMs": 10 }
+{ "type": "audioStop" }
+```
+Dopo `audioStart` arrivano i pacchetti audio (binario, tipo `2`) in quel formato, fino ad `audioStop` o a un
+nuovo `audioStart`. `codec` è uno di quelli del `hello` del ricevitore: `opus` (consigliato, ~128 kbit/s) oppure
+`pcm` (16 bit little-endian, campioni dei canali alternati, ~1,5 Mbit/s). Il PC manda l'audio che sta suonando
+(tutto il mix di Windows). Quando non suona niente non arrivano pacchetti.
+
+In `settings` il campo `audio` dice se l'audio è acceso; il ricevitore lo cambia con `configure`:
+```json
+{ "type": "configure", "audio": false }
+```
+
 ### `bye` — entrambi
 ```json
 { "type": "bye", "reason": "user" }
 ```
 Chi lo manda chiude subito dopo. `reason`: `user`, `replaced`, `protocol`, `error`.
 
-## Pacchetti video (binario)
+## Pacchetti video e audio (binario)
 
-Un messaggio WebSocket binario = un fotogramma compresso:
+Un messaggio WebSocket binario = un fotogramma compresso o un pezzo di audio:
 
 | Byte | Contenuto |
 |---|---|
-| 0 | tipo: `1` = video |
-| 1 | flag: bit 0 = fotogramma chiave (IDR), bit 1 = contiene SPS/PPS |
+| 0 | tipo: `1` = video, `2` = audio (dalla 0.4) |
+| 1 | flag (video): bit 0 = fotogramma chiave (IDR), bit 1 = contiene SPS/PPS; audio: 0 |
 | 2–9 | istante di presentazione in microsecondi, intero a 64 bit big-endian |
-| 10… | il fotogramma H.264 in formato Annex B (NAL separati da `00 00 00 01`) |
+| 10… | video: il fotogramma H.264 in formato Annex B (NAL separati da `00 00 00 01`); audio: un pacchetto Opus o un blocco PCM |
 
 - Ogni fotogramma chiave è preceduto da SPS e PPS nello stesso pacchetto: un ricevitore può
   agganciarsi a qualsiasi IDR.
 - Niente B-frame: i fotogrammi arrivano già nell'ordine in cui vanno mostrati.
 - Se la rete rallenta, il trasmettitore scarta fotogrammi fino al prossimo IDR invece di accumulare ritardo.
+- L'audio passa prima del video. Un ricevitore che non conosce un tipo ignora il pacchetto.
+- Il ricevitore suona l'audio appena arriva, con una piccola riserva: se ne accumula troppo (oltre ~150 ms) scarta il vecchio, come il video.

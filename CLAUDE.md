@@ -24,6 +24,9 @@ Testi per l'utente in italiano, commenti e nomi nel codice in inglese (come in S
   ricevitore, anche più grande). Ogni scelta ha come chiave l'altezza risultante. Il ricevitore riporta in `maxWidth`/`maxHeight`
   il limite del decoder, non del proprio schermo. Trackpad: gesti in `receiver/TrackpadGestures.kt`, puntatore in
   `Capture/Input/MouseInjector`. Scala di Estendi: `VirtualDisplay/DisplayScale` (richieste DPI non documentate -3/-4).
+- Audio: `Capture/Audio/LoopbackAudio` (WASAPI loopback con NAudio, Opus a 10 ms con Concentus, oppure PCM) →
+  `SenderSession.SendAudio` (coda propria, prima del video) → pacchetti binari tipo 2 → `receiver/AudioPlayer.kt`
+  (decoder Opus di Android, AudioTrack a bassa latenza, scarta oltre 150 ms). `altrove-cli audio` lo prova senza tablet.
 
 ## Rilasci e aggiornamenti
 - Repository pubblico `LoLler111/Altrove`; un tag `vX.Y.Z` uguale a `version.txt` fa partire `.github/workflows/release.yml`

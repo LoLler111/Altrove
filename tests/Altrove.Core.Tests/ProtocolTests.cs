@@ -197,4 +197,17 @@ public class ProtocolTests
         Assert.Contains("\"scales\":[100,125]", json);
         Assert.EndsWith("\"scale\":125}", json);
     }
+
+    [Fact]
+    public void Audio_messages_and_packets_match_the_android_side()
+    {
+        Assert.Equal("{\"type\":\"audioStart\",\"codec\":\"opus\",\"sampleRate\":48000,\"channels\":2,\"frameMs\":10}",
+            new AudioStartMessage(AudioCodecs.Opus, 48000, 2, 10).ToJson());
+        Assert.Equal("{\"type\":\"audioStop\"}", new AudioStopMessage().ToJson());
+        var hello = Assert.IsType<HelloMessage>(ControlMessage.Parse(
+            "{\"type\":\"hello\",\"protocol\":1,\"role\":\"receiver\",\"id\":\"tab\",\"name\":\"Tab A\",\"audioCodecs\":[\"opus\",\"pcm\"]}"));
+        Assert.Equal(["opus", "pcm"], hello.AudioCodecs!);
+        Assert.Equal(new byte[] { 2, 0, 0, 0, 0, 0, 0, 0, 1, 0, 9, 8 }, VideoPacket.EncodeAudio([9, 8], 256));
+        Assert.False(VideoPacket.TryDecode(VideoPacket.EncodeAudio([9, 8], 256), out _, out _, out _)); // not video
+    }
 }

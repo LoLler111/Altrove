@@ -15,7 +15,8 @@ locale a un'app ricevitore. Non serve Miracast e funziona anche con un PC colleg
 | App Android: ricevitore (tablet, telefono, Fire TV con Fire OS) | fatto |
 | Schermo virtuale ed estensione (fase 2) | provato sul PC fisso; manca la prova con il tablet |
 | Dal tablet: tocco, trackpad, pannello con risoluzioni e scala (fase 5) | tocco provato sul tablet; trackpad e menu delle risoluzioni nell'emulatore; scala da provare sul fisso |
-| Dal tablet: audio del PC, microfono del tablet (fase 5) | da fare |
+| Audio del PC sul ricevitore (fase 5) | provato nella VM e nell'emulatore; manca la prova con il tablet |
+| Microfono del tablet e fotocamera come webcam (fase 5) | da fare |
 | Ricevitore web per Chromecast e TV LG webOS (fase 3) | da fare |
 | App Android come trasmettitore (fase 4) | da fare |
 
@@ -101,6 +102,10 @@ Con «Usa il PC dal ricevitore (tocco e trackpad)» attivo sul PC, nel pannello 
 Funziona in Duplica e in Estendi, anche su PC senza schermo touch. Windows non lascia toccare le finestre aperte come
 amministratore né le richieste di permesso (UAC).
 
+**Audio**: con «Manda l'audio del PC al ricevitore» quello che il PC sta suonando (tutto il suono di Windows) si sente
+anche sul tablet, compresso in Opus (~128 kbit/s); il volume è quello del tablet. Si accende e si spegne anche dal
+pannello. Il PC continua a suonare anche dalle sue casse.
+
 **Pannello**: la linguetta sul bordo sinistro, o il tasto Indietro, apre il pannello. In alto risoluzione, fps,
 Mbit/s ricevuti e tempo di decodifica. Da lì si cambiano senza staccarsi modalità, schermo, fluidità, qualità e
 risoluzione (un menu con tutte quelle possibili; «Consigliata» è la più grande che sta nello schermo del dispositivo;
@@ -126,6 +131,7 @@ La prima volta Windows può chiedere di permettere ad Altrove l'accesso alla ret
 | `altrove-cli vdd [COMANDO]` | Stato del driver e dei display; manda un comando alla sua pipe (es. `RELOAD_DRIVER`) |
 | `altrove-cli touch 0.5,0.5 [--seconds 2]` | Un tocco (o una pressione lunga) come lo manderebbe il ricevitore, a x,y da 0 a 1 sullo schermo `--monitor N` |
 | `altrove-cli scale [150] [--monitor N]` | Legge (o imposta) la scala di Windows di uno schermo |
+| `altrove-cli audio [pcm] --seconds 5` | Registra quello che suona il PC come lo riceverebbe il tablet, lo ridecodifica e salva `altrove-audio.wav` |
 | `altrove-cli stress capture\|convert\|encode --seconds 60` | Un pezzo della catena da solo per un minuto, per cercare perdite e crash |
 
 ### Schermo virtuale (Estendi)
@@ -140,7 +146,6 @@ Opzioni comuni: `--fps`, `--height`, `--kbps`, `--monitor N`, `--software` (forz
 
 ## Limiti noti della fase 1
 
-- Niente audio.
 - Nessun abbinamento: qualunque PC della rete può trasmettere a un ricevitore aperto.
 - I contenuti protetti (Netflix e simili) risultano neri: lo impone il DRM di Windows.
 - Sui Fire TV con Vega OS (Fire TV Stick 4K Select, Fire TV Stick HD 2026) l'APK non si installa.

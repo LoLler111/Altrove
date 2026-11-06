@@ -18,6 +18,7 @@ public sealed class AppSettings
     public bool AllowTouch { get; set; } = true;
     /// <summary>Windows scale of the virtual monitor in percent, 0 = what Windows picks.</summary>
     public int ExtendScale { get; set; }
+    public bool SendAudio { get; set; } = true;
 
     private static readonly JsonSerializerOptions Options = new() { WriteIndented = true };
 

@@ -25,11 +25,15 @@ public sealed class SenderSession : IAsyncDisposable
     /// <summary>Frames waiting to be sent before the queue is thrown away: about 130 ms at 60 fps.</summary>
     internal const int MaxQueuedFrames = 8;
 
+    /// <summary>Audio packets waiting before the oldest are dropped: about half a second of 10 ms Opus packets.</summary>
+    internal const int MaxQueuedAudio = 50;
+
     private readonly ClientWebSocket _socket;
     private readonly CancellationTokenSource _stop = new();
     private readonly object _lock = new();
     private readonly Queue<byte[]> _video = new();
     private readonly Queue<string> _control = new();
+    private readonly Queue<byte[]> _audio = new();
     private readonly SemaphoreSlim _wake = new(0);
     private readonly Stopwatch _clock = Stopwatch.StartNew();
 
@@ -170,6 +174,34 @@ public sealed class SenderSession : IAsyncDisposable
         }
     }
 
+    /// <summary>True when the receiver can play sound in <paramref name="codec"/> (its hello listed it).</summary>
+    public bool ReceiverPlays(string codec) => Receiver.AudioCodecs?.Contains(codec) == true;
+
+    /// <summary>Announces the audio format; packets sent with <see cref="SendAudio"/> follow it.</summary>
+    public void StartAudio(AudioStartMessage format) => EnqueueControl(format);
+
+    public void StopAudio()
+    {
+        lock (_lock)
+            _audio.Clear();
+        EnqueueControl(new AudioStopMessage());
+    }
+
+    /// <summary>Queues one audio packet; if the network is behind, the oldest sound goes first.</summary>
+    public void SendAudio(ReadOnlySpan<byte> payload, long presentationMicros)
+    {
+        if (_closed != 0)
+            return;
+        var packet = VideoPacket.EncodeAudio(payload, presentationMicros);
+        lock (_lock)
+        {
+            while (_audio.Count >= MaxQueuedAudio)
+                _audio.Dequeue();
+            _audio.Enqueue(packet);
+        }
+        _wake.Release();
+    }
+
     /// <summary>Tells the receiver what is streaming and what it may change (feature <see cref="Features.Configure"/>).</summary>
     public void SendSettings(SettingsMessage settings) => EnqueueControl(settings);
 
@@ -239,12 +271,19 @@ public sealed class SenderSession : IAsyncDisposable
                 {
                     string? text = null;
                     byte[]? packet = null;
+                    var isVideo = false;
                     lock (_lock)
                     {
+                        // Control first, then sound (small, and late sound is worse than a late frame), then video.
                         if (_control.Count > 0)
                             text = _control.Dequeue();
+                        else if (_audio.Count > 0)
+                            packet = _audio.Dequeue();
                         else if (_video.Count > 0)
+                        {
                             packet = _video.Dequeue();
+                            isVideo = true;
+                        }
                     }
                     if (text is not null && ReferenceEquals(text, _finalMessage))
                     {
@@ -257,7 +296,8 @@ public sealed class SenderSession : IAsyncDisposable
                     else if (packet is not null)
                     {
                         await _socket.SendAsync(packet, WebSocketMessageType.Binary, true, token);
-                        Interlocked.Increment(ref _framesSent);
+                        if (isVideo)
+                            Interlocked.Increment(ref _framesSent);
                         Interlocked.Add(ref _bytesSent, packet.Length);
                     }
                     else
@@ -397,6 +437,7 @@ public sealed class SenderSession : IAsyncDisposable
                 {
                     _video.Clear();
                     _control.Clear();
+                    _audio.Clear();
                     _finalMessage = bye;
                     _control.Enqueue(bye);
                 }

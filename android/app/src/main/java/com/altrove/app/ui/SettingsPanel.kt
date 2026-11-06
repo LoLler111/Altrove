@@ -134,6 +134,11 @@ fun SettingsPanel(
                 receiver.configure(Configure(bitrateKbps = it))
             }
             Note("Se l'immagine scatta lontano dal router, prova 30 fps o una qualità più bassa.")
+            current.audio?.let { on ->
+                Section("AUDIO DEL PC")
+                Chips(listOf(true, false), on, enabled, { if (it) "Acceso" else "Spento" }) { receiver.configure(Configure(audio = it)) }
+                Note("Si sente qui quello che suona il PC. Il volume è quello di questo dispositivo.")
+            }
         }
 
         Section("USARE IL PC DA QUI")

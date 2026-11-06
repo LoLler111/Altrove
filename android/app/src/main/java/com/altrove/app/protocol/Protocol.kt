@@ -36,6 +36,7 @@ data class Hello(
     val maxWidth: Int? = null,
     val maxHeight: Int? = null,
     val features: List<String>? = null,
+    val audioCodecs: List<String>? = null,
 ) : ControlMessage() {
     fun supports(feature: String) = features?.contains(feature) == true
 }
@@ -81,6 +82,9 @@ object Features {
 
     /** In extend mode the virtual monitor's scale can be chosen. */
     const val SCALE = "scale"
+
+    /** The sender streams the PC's sound and accepts configure.audio. */
+    const val AUDIO = "audio"
 }
 
 object TouchStates {
@@ -126,6 +130,7 @@ data class StreamSettings(
     val choices: SettingsChoices,
     val notice: String? = null,
     val scale: Int? = null,
+    val audio: Boolean? = null,
 ) : ControlMessage()
 
 /** A request to change some settings; null fields stay as they are. */
@@ -138,6 +143,7 @@ data class Configure(
     val fps: Int? = null,
     val bitrateKbps: Int? = null,
     val scale: Int? = null,
+    val audio: Boolean? = null,
 ) : ControlMessage()
 
 /** One finger, at a position on the streamed image from 0 to 1. */
@@ -148,6 +154,20 @@ data class TouchPointer(val id: Int, val x: Double, val y: Double, val state: St
 @Serializable
 @SerialName("touch")
 data class Touch(val pointers: List<TouchPointer>) : ControlMessage()
+
+object AudioCodecs {
+    const val OPUS = "opus"
+    const val PCM = "pcm"
+}
+
+/** Audio packets (binary kind 2) in this format follow, until [AudioStop] or another [AudioStart]. */
+@Serializable
+@SerialName("audioStart")
+data class AudioStart(val codec: String, val sampleRate: Int, val channels: Int, val frameMs: Int) : ControlMessage()
+
+@Serializable
+@SerialName("audioStop")
+data object AudioStop : ControlMessage()
 
 object MouseActions {
     const val MOVE = "move"
@@ -168,7 +188,7 @@ object MouseButtons {
 data class Mouse(val action: String, val dx: Double? = null, val dy: Double? = null, val button: String? = null) : ControlMessage()
 
 object Messages {
-    private val known = setOf("hello", "start", "stop", "keyframe", "ping", "pong", "stats", "bye", "settings", "configure", "touch", "mouse")
+    private val known = setOf("hello", "start", "stop", "keyframe", "ping", "pong", "stats", "bye", "settings", "configure", "touch", "mouse", "audioStart", "audioStop")
 
     val json = Json {
         classDiscriminator = "type"
@@ -196,6 +216,7 @@ class VideoPacket(val flags: Int, val presentationMicros: Long, val data: ByteAr
 
     companion object {
         const val KIND_VIDEO = 1
+        const val KIND_AUDIO = 2
         const val HEADER_SIZE = 10
         const val FLAG_KEYFRAME = 1
         const val FLAG_PARAMETER_SETS = 2

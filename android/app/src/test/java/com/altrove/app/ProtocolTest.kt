@@ -1,6 +1,8 @@
 package com.altrove.app
 
 import android.view.MotionEvent
+import com.altrove.app.protocol.AudioStart
+import com.altrove.app.protocol.AudioStop
 import com.altrove.app.protocol.Configure
 import com.altrove.app.protocol.DisplayInfo
 import com.altrove.app.protocol.Features
@@ -143,5 +145,16 @@ class ProtocolTest {
         assertEquals(ResolutionChoice(1200, 1920, 1200, true), settings.choices.resolutions!![1])
         assertEquals(listOf(100, 125, 150), settings.choices.scales)
         assertEquals("""{"type":"configure","scale":150}""", Messages.encode(Configure(scale = 150)))
+    }
+
+    @Test
+    fun audio_messages_match_the_windows_side() {
+        assertEquals(AudioStart("opus", 48000, 2, 10), Messages.parse("""{"type":"audioStart","codec":"opus","sampleRate":48000,"channels":2,"frameMs":10}"""))
+        assertEquals(AudioStop, Messages.parse("""{"type":"audioStop"}"""))
+        val hello = Messages.encode(Hello(1, "receiver", "tab", "Tab A", audioCodecs = listOf("opus", "pcm")))
+        assertTrue(hello, hello.contains(""""audioCodecs":["opus","pcm"]"""))
+        val head = com.altrove.app.receiver.AudioPlayer.opusHead(2, 48000)
+        val bytes = ByteArray(head.remaining()).also { head.get(it) }
+        assertArrayEquals(byteArrayOf(0x4F, 0x70, 0x75, 0x73, 0x48, 0x65, 0x61, 0x64, 1, 2, 0, 0, 0x80.toByte(), 0xBB.toByte(), 0, 0, 0, 0, 0), bytes)
     }
 }

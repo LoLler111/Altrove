@@ -150,6 +150,10 @@
                                   ToolTip="Dal pannello del ricevitore si sceglie tra tocco (si clicca dove si tocca) e trackpad (il dito muove il puntatore).">
                             <TextBlock Text="Usa il PC dal ricevitore (tocco e trackpad)" />
                         </CheckBox>
+                        <CheckBox IsChecked="{Binding SendAudio}" Margin="0,8,0,0"
+                                  ToolTip="Quello che il PC sta suonando arriva anche al ricevitore. Si accende e si spegne anche dal pannello del ricevitore.">
+                            <TextBlock Text="Manda l'audio del PC al ricevitore" />
+                        </CheckBox>
                         <TextBlock FontSize="11.5" Foreground="{StaticResource TextDimBrush}" TextWrapping="Wrap" Margin="0,4,0,0"
                                    Text="Dal ricevitore si possono anche cambiare modalità e qualità durante la trasmissione." />
                     </StackPanel>

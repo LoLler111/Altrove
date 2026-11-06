@@ -16,6 +16,7 @@ public enum VideoPacketFlags : byte
 public static class VideoPacket
 {
     public const byte KindVideo = 1;
+    public const byte KindAudio = 2;
     public const int HeaderSize = 10;
 
     public static byte[] Encode(ReadOnlySpan<byte> accessUnit, long presentationMicros, VideoPacketFlags flags)
@@ -25,6 +26,16 @@ public static class VideoPacket
         packet[1] = (byte)flags;
         BinaryPrimitives.WriteInt64BigEndian(packet.AsSpan(2, 8), presentationMicros);
         accessUnit.CopyTo(packet.AsSpan(HeaderSize));
+        return packet;
+    }
+
+    /// <summary>An audio packet (kind 2): an Opus packet or a block of PCM, after the same 10-byte header.</summary>
+    public static byte[] EncodeAudio(ReadOnlySpan<byte> payload, long presentationMicros)
+    {
+        var packet = new byte[HeaderSize + payload.Length];
+        packet[0] = KindAudio;
+        BinaryPrimitives.WriteInt64BigEndian(packet.AsSpan(2, 8), presentationMicros);
+        payload.CopyTo(packet.AsSpan(HeaderSize));
         return packet;
     }
 
