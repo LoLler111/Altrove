@@ -711,19 +711,31 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
         var settings = new EncoderSettings(width, height, fps, Selected(BitrateChoices) * 1000);
         var source = new ScreenVideoSource(target, SoftwareEncoder);
         _source = source;
+        string Describe() => extend
+            ? $"{_receiverName} è un nuovo schermo a destra degli altri: {width}×{height}, {fps} fps · {source.EncoderName}"
+            : $"In trasmissione su {_receiverName}: {width}×{height}, {fps} fps · {source.EncoderName}";
+        source.Failed += ex => App.Log($"Video fermato: {ex}");
+        source.Recovered += recovery =>
+        {
+            App.Log($"Video: «{recovery.Before}» non funziona, passo a «{recovery.After}». Errore: {recovery.Error}");
+            Application.Current?.Dispatcher.BeginInvoke(() =>
+            {
+                if (_source == source && State == SessionState.Streaming)
+                    Status = Describe();
+            });
+        };
         var streamMode = extend ? StreamModes.Extend : StreamModes.Mirror;
         if (session.IsStarted)
             await session.SwitchSourceAsync(source, settings, streamMode, token);
         else
             await session.StartAsync(source, settings, streamMode, token);
+        App.Log($"Video: {width}×{height}, {fps} fps con {source.EncoderName}.");
         _touch?.SetTarget(target);
         _mouse?.SetTarget(target);
         _streamTarget = target;
         _applied = CurrentChoices();
         session.SendSettings(CurrentSettings(null));
-        Status = extend
-            ? $"{_receiverName} è un nuovo schermo a destra degli altri: {width}×{height}, {fps} fps · {source.EncoderName}"
-            : $"In trasmissione su {_receiverName}: {width}×{height}, {fps} fps · {source.EncoderName}";
+        Status = Describe();
     }
 
     /// <summary>What is streaming and what the receiver may change, for its settings panel.</summary>

@@ -15,6 +15,7 @@ using Altrove.Core.Streaming;
 //   altrove-cli send <host[:port]> [opts]    stream to a receiver
 //   altrove-cli fake-receiver [--port N]     a receiver on localhost that counts what arrives
 // Options: --seconds N  --fps N  --height N  --kbps N  --software  --monitor N  --out file.h264
+//          --simulate-failure N  (the next N encoders break after 30 frames: tries the recovery)
 
 SetProcessDpiAwarenessContext(-4); // per-monitor v2: real pixel sizes
 Console.OutputEncoding = Encoding.UTF8;
@@ -321,8 +322,10 @@ static async Task<int> Record(Options options, MonitorInfo? chosen = null)
     var frames = new List<EncodedFrame>();
     var firstAt = -1L;
     var clock = Stopwatch.StartNew();
+    H264Encoder.SimulateFailures(options.SimulateFailures);
     await using var source = new ScreenVideoSource(monitor, options.Software);
-    source.Failed += ex => Console.Error.WriteLine($"Errore encoder: {ex.Message}");
+    source.Failed += ex => Console.Error.WriteLine($"Errore encoder: {ex}");
+    source.Recovered += r => Console.WriteLine($"Ripiego: «{r.Before}» → «{r.After}» ({r.Error.Message})");
     source.FrameEncoded += frame =>
     {
         lock (frames)
@@ -489,7 +492,9 @@ static async Task<int> Send(Options options)
     session.StatsUpdated += s => Console.WriteLine(
         $"  {s.SentFps:0.0} fps inviati, {s.Mbps:0.0} Mbit/s, RTT {s.RoundTripMs?.ToString("0") ?? "-"} ms, ricevitore {s.ReceiverFps?.ToString("0.0") ?? "-"} fps, scartati {s.DroppedFrames}");
 
+    H264Encoder.SimulateFailures(options.SimulateFailures);
     await using var source = new ScreenVideoSource(monitor, options.Software);
+    source.Recovered += r => Console.WriteLine($"Ripiego: «{r.Before}» → «{r.After}» ({r.Error.Message})");
     await session.StartAsync(source, settings, StreamModes.Mirror, CancellationToken.None);
     Console.WriteLine($"Trasmetto {width}×{height} @ {options.Fps} con {source.EncoderName}");
     var finished = await Task.WhenAny(closed.Task, Task.Delay(TimeSpan.FromSeconds(options.Seconds)));
@@ -597,11 +602,12 @@ static string MachineId() => Convert.ToHexString(System.Security.Cryptography.SH
 [DllImport("user32.dll")]
 static extern bool SetProcessDpiAwarenessContext(nint value);
 
-internal sealed record Options(int Seconds, int Fps, int Height, int Kbps, bool Software, int Monitor, string Out, int Port, string? Positional, string? Display = null)
+internal sealed record Options(int Seconds, int Fps, int Height, int Kbps, bool Software, int Monitor, string Out, int Port, string? Positional,
+    string? Display = null, int SimulateFailures = 0)
 {
     public static Options Parse(string[] args)
     {
-        int seconds = 5, fps = 60, height = 1080, kbps = 10_000, monitor = 1, port = AltroveProtocol.DefaultPort;
+        int seconds = 5, fps = 60, height = 1080, kbps = 10_000, monitor = 1, port = AltroveProtocol.DefaultPort, simulate = 0;
         var software = false;
         var output = "altrove-test.h264";
         string? positional = null, display = null;
@@ -619,10 +625,11 @@ internal sealed record Options(int Seconds, int Fps, int Height, int Kbps, bool 
                 case "--out": output = Next(); break;
                 case "--port": port = int.Parse(Next()); break;
                 case "--display": display = Next(); break;
+                case "--simulate-failure": simulate = int.Parse(Next()); break;
                 default: positional = args[i]; break;
             }
         }
-        return new Options(seconds, fps, height, kbps, software, monitor, output, port, positional, display);
+        return new Options(seconds, fps, height, kbps, software, monitor, output, port, positional, display, simulate);
     }
 }
 

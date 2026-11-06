@@ -82,6 +82,28 @@ public sealed class H264Encoder : IDisposable
     private long _lastSubmittedTime = -1;
     private ID3D11Texture2D? _readback;
 
+    // Test hook (altrove-cli --simulate-failure): the next encoders created fail after a few frames, the way
+    // Intel Quick Sync does on some laptops, so the recovery can be tried on a PC whose encoder works.
+    private static int _simulatedFailures;
+    private const int SimulatedFailureFrame = 30;
+    private readonly bool _simulateFailure = TakeSimulatedFailure();
+    private int _framesIn;
+
+    /// <summary>Makes the next <paramref name="count"/> encoders fail with E_UNEXPECTED after a few frames.</summary>
+    public static void SimulateFailures(int count) => Volatile.Write(ref _simulatedFailures, count);
+
+    private static bool TakeSimulatedFailure()
+    {
+        while (true)
+        {
+            var left = Volatile.Read(ref _simulatedFailures);
+            if (left <= 0)
+                return false;
+            if (Interlocked.CompareExchange(ref _simulatedFailures, left - 1, left) == left)
+                return true;
+        }
+    }
+
     private H264Encoder(GraphicsDevice device, EncoderSettings settings, IMFActivate activate, bool hardware, string name)
     {
         _device = device;
@@ -160,9 +182,11 @@ public sealed class H264Encoder : IDisposable
 
     /// <summary>
     /// The best encoder that accepts these settings: the hardware one of the capturing GPU if it can take
-    /// GPU frames, else any other that works, else software. Throws when none can be set up.
+    /// GPU frames, else any other that works, else software. Encoders named in <paramref name="skip"/>
+    /// (they broke while streaming) are left out. Throws when none can be set up.
     /// </summary>
-    public static H264Encoder Create(GraphicsDevice device, EncoderSettings settings, bool texturesAvailable, bool preferSoftware = false)
+    public static H264Encoder Create(GraphicsDevice device, EncoderSettings settings, bool texturesAvailable, bool preferSoftware = false,
+        IReadOnlySet<string>? skip = null)
     {
         EnsureStarted();
         var vendor = $"VEN_{device.VendorId:X4}";
@@ -175,6 +199,11 @@ public sealed class H264Encoder : IDisposable
             foreach (var (activate, hardware) in candidates)
             {
                 var name = NameOf(activate, hardware);
+                if (skip?.Contains(name) == true)
+                {
+                    errors.Add($"{name}: già fallito durante la trasmissione");
+                    continue;
+                }
                 try
                 {
                     var encoder = new H264Encoder(device, settings, activate, hardware, name);
@@ -484,6 +513,8 @@ public sealed class H264Encoder : IDisposable
 
     private void Encode(Nv12Frame frame, long time)
     {
+        if (_simulateFailure && ++_framesIn > SimulatedFailureFrame)
+            throw new COMException("Guasto simulato dell'encoder (altrove-cli --simulate-failure)", unchecked((int)0x8000FFFF));
         if (_keyframeRequested && _codecApi != IntPtr.Zero)
         {
             _keyframeRequested = false;

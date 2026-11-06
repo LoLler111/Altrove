@@ -28,8 +28,10 @@ public interface INv12Converter : IDisposable
 
 public static class Nv12Converters
 {
-    public static INv12Converter Create(GraphicsDevice device, int outputWidth, int outputHeight)
+    public static INv12Converter Create(GraphicsDevice device, int outputWidth, int outputHeight, bool allowGpu = true)
     {
+        if (!allowGpu)
+            return new CpuNv12Converter(device, outputWidth, outputHeight);
         try
         {
             return new GpuNv12Converter(device, outputWidth, outputHeight);
