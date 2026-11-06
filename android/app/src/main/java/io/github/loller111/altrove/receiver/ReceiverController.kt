@@ -9,6 +9,10 @@ import android.view.Surface
 import io.github.loller111.altrove.BuildConfig
 import io.github.loller111.altrove.protocol.AltroveProtocol
 import io.github.loller111.altrove.protocol.Bye
+import io.github.loller111.altrove.protocol.Configure
+import io.github.loller111.altrove.protocol.Features
+import io.github.loller111.altrove.protocol.StreamSettings
+import io.github.loller111.altrove.protocol.Touch
 import io.github.loller111.altrove.protocol.ControlMessage
 import io.github.loller111.altrove.protocol.DisplayInfo
 import io.github.loller111.altrove.protocol.Hello
@@ -61,13 +65,57 @@ class ReceiverController(private val context: Context) : ReceiverServer.Listener
     private var stream: Start? = null
     private var senderName = ""
 
+    private val prefs = context.getSharedPreferences("altrove", Context.MODE_PRIVATE)
+    private val _features = MutableStateFlow<Set<String>>(emptySet())
+    private val _settings = MutableStateFlow<StreamSettings?>(null)
+    private val _applying = MutableStateFlow(false)
+    private val _touchEnabled = MutableStateFlow(prefs.getBoolean("touch", true))
+    private var applyingJob: Job? = null
+
     val state: StateFlow<ReceiverState> = _state
-    /** One line for the corner of the screen while streaming. */
+    /** One line for the settings panel while streaming. */
     val stats: StateFlow<String> = _stats
+    /** What the connected sender handles ([Features]); empty for a 0.1 sender. */
+    val senderFeatures: StateFlow<Set<String>> = _features
+    /** The sender's latest settings, for the panel; null until it sends some. */
+    val settings: StateFlow<StreamSettings?> = _settings
+    /** A [configure] was sent and the sender has not answered yet. */
+    val applying: StateFlow<Boolean> = _applying
+    /** The user's choice: touches on the video go to the PC. */
+    val touchEnabled: StateFlow<Boolean> = _touchEnabled
 
     val deviceId: String by lazy {
-        val prefs = context.getSharedPreferences("altrove", Context.MODE_PRIVATE)
         prefs.getString("id", null) ?: UUID.randomUUID().toString().replace("-", "").also { prefs.edit().putString("id", it).apply() }
+    }
+
+    fun setTouchEnabled(enabled: Boolean) {
+        _touchEnabled.value = enabled
+        prefs.edit().putBoolean("touch", enabled).apply()
+    }
+
+    /** True when a touch on the video should go to the PC rather than open the panel. */
+    val sendsTouch get() = _touchEnabled.value && Features.TOUCH in _features.value
+
+    fun sendTouch(touch: Touch) {
+        if (sendsTouch) server?.send(touch)
+    }
+
+    /** Asks the sender for other settings; [applying] stays true until its new settings arrive. */
+    fun configure(request: Configure) {
+        if (Features.CONFIGURE !in _features.value) return
+        _applying.value = true
+        server?.send(request)
+        applyingJob?.cancel()
+        applyingJob = scope.launch {
+            // An answer that never comes must not lock the panel.
+            delay(20_000)
+            _applying.value = false
+        }
+    }
+
+    /** Ends the stream from this side: the PC stops and the receiver waits for the next one. */
+    fun disconnect() {
+        server?.disconnect()
     }
 
     fun start(display: DisplayInfo) {
@@ -160,6 +208,7 @@ class ReceiverController(private val context: Context) : ReceiverServer.Listener
                     return
                 }
                 senderName = message.name
+                _features.value = message.features.orEmpty().toSet()
                 _state.value = ReceiverState.Connected(senderName)
             }
             is Start -> {
@@ -179,6 +228,11 @@ class ReceiverController(private val context: Context) : ReceiverServer.Listener
                 _state.value = ReceiverState.Connected(senderName)
             }
             is Ping -> connection.send(Messages.encode(Pong(message.t)))
+            is StreamSettings -> {
+                _settings.value = message
+                applyingJob?.cancel()
+                _applying.value = false
+            }
             is Bye -> connection.close()
             else -> Unit
         }
@@ -190,6 +244,10 @@ class ReceiverController(private val context: Context) : ReceiverServer.Listener
 
     override fun onSenderDisconnected(connection: WebSocket) {
         statsJob?.cancel()
+        applyingJob?.cancel()
+        _applying.value = false
+        _features.value = emptySet()
+        _settings.value = null
         synchronized(lock) {
             decoder?.release()
             decoder = null

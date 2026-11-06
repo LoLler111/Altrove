@@ -66,42 +66,73 @@ public sealed class ScreenVideoSource : IEncodedVideoSource
 
     private int _captured, _submitted;
 
+    // Held while a frame is converted and handed to the encoder, so disposal never pulls the converter,
+    // encoder or device out from under a frame in flight on the capture thread.
+    private readonly object _frameLock = new();
+
     private void OnFrame(ID3D11Texture2D texture, TimeSpan systemTime)
     {
         Interlocked.Increment(ref _captured);
-        var now = _clock.ElapsedTicks;
-        if (now - _lastAccepted < _minimumTicks)
-            return;
-        _lastAccepted = now;
-        Interlocked.Increment(ref _submitted);
-        try
+        lock (_frameLock)
         {
-            var desc = texture.Description;
-            var frame = _converter!.Convert(texture, (int)desc.Width, (int)desc.Height);
-            // Media Foundation counts in 100 ns units.
-            _encoder!.Submit(frame, (long)(now * (10_000_000.0 / Stopwatch.Frequency)));
-        }
-        catch (Exception ex) when (ex is SharpGen.Runtime.SharpGenException or InvalidOperationException)
-        {
-            Failed?.Invoke(ex);
+            if (_disposed || _converter is not { } converter || _encoder is not { } encoder)
+                return;
+            var now = _clock.ElapsedTicks;
+            if (now - _lastAccepted < _minimumTicks)
+                return;
+            _lastAccepted = now;
+            Interlocked.Increment(ref _submitted);
+            try
+            {
+                var desc = texture.Description;
+                var frame = converter.Convert(texture, (int)desc.Width, (int)desc.Height);
+                // Media Foundation counts in 100 ns units.
+                encoder.Submit(frame, (long)(now * (10_000_000.0 / Stopwatch.Frequency)));
+            }
+            catch (Exception ex) when (ex is SharpGen.Runtime.SharpGenException or InvalidOperationException or ObjectDisposedException)
+            {
+                Failed?.Invoke(ex);
+            }
         }
     }
 
-    public void RequestKeyframe() => _encoder?.RequestKeyframe();
+    public void RequestKeyframe()
+    {
+        lock (_frameLock)
+        {
+            if (!_disposed)
+                _encoder?.RequestKeyframe();
+        }
+    }
 
     public ValueTask DisposeAsync()
     {
+        ScreenCapture? capture;
         lock (_lock)
         {
+            if (_disposed)
+                return ValueTask.CompletedTask;
             _disposed = true;
-            _capture?.Dispose();
-            _encoder?.Dispose();
-            _converter?.Dispose();
-            _device?.Dispose();
+            capture = _capture;
             _capture = null;
-            _encoder = null;
-            _converter = null;
-            _device = null;
+        }
+        // First no new frames, then wait for the one in flight, then tear down what it uses.
+        if (capture is not null)
+        {
+            capture.FrameArrived -= OnFrame;
+            capture.Dispose();
+        }
+        lock (_lock)
+        {
+            lock (_frameLock)
+            {
+                _encoder?.Dispose();
+                _converter?.Dispose();
+                _device?.Dispose();
+                _encoder = null;
+                _converter = null;
+                _device = null;
+            }
         }
         return ValueTask.CompletedTask;
     }

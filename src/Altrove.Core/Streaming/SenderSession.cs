@@ -111,23 +111,64 @@ public sealed class SenderSession : IAsyncDisposable
         return StreamSizing.Fit(sourceWidth, sourceHeight, maxWidth, maxHeight);
     }
 
+    /// <summary>Raised on a network thread for every touch message (only if the hello announced <see cref="Features.Touch"/>).</summary>
+    public event Action<TouchMessage>? TouchReceived;
+
+    /// <summary>Raised on a network thread when the receiver asks to change settings.</summary>
+    public event Action<ConfigureMessage>? ConfigureRequested;
+
     public async Task StartAsync(IEncodedVideoSource source, EncoderSettings settings, string mode, CancellationToken token)
     {
-        if (_source is not null)
+        if (_sendLoop is not null)
             throw new InvalidOperationException("Already streaming.");
-        _source = source;
-        _waitingForKeyframe = true; // nothing is sendable before the first IDR
-        source.FrameEncoded += OnFrame;
-        source.Failed += OnSourceFailed;
-
         _statsStart = _clock.ElapsedTicks;
         _sendLoop = Task.Run(SendLoopAsync);
         _receiveLoop = Task.Run(ReceiveLoopAsync);
         _pingLoop = Task.Run(PingLoopAsync);
+        await SwitchSourceAsync(source, settings, mode, token);
+    }
 
+    /// <summary>
+    /// Streams from <paramref name="source"/> from now on, without closing the connection: the receiver gets a
+    /// new start and restarts its decoder. The previous source is let go but not disposed: that is the caller's.
+    /// </summary>
+    public async Task SwitchSourceAsync(IEncodedVideoSource source, EncoderSettings settings, string mode, CancellationToken token)
+    {
+        if (_sendLoop is null)
+            throw new InvalidOperationException("Not started.");
+        DetachSource();
+        _source = source;
+        source.FrameEncoded += OnFrame;
+        source.Failed += OnSourceFailed;
         EnqueueControl(new StartMessage("h264", settings.Width, settings.Height, settings.Fps, mode));
         await source.StartAsync(settings, token);
     }
+
+    /// <summary>True once <see cref="StartAsync"/> ran: later sources go through <see cref="SwitchSourceAsync"/>.</summary>
+    public bool IsStarted => _sendLoop is not null;
+
+    /// <summary>
+    /// Stops listening to the current source, before the caller disposes it: nothing it does from now on
+    /// (frames, errors while shutting down) reaches the receiver. The connection stays open.
+    /// </summary>
+    public void DetachSource()
+    {
+        if (_source is { } previous)
+        {
+            previous.FrameEncoded -= OnFrame;
+            previous.Failed -= OnSourceFailed;
+        }
+        _source = null;
+        lock (_lock)
+        {
+            // Frames of the old stream mean nothing to the new decoder; nothing is sendable before the first IDR.
+            _video.Clear();
+            _waitingForKeyframe = true;
+        }
+    }
+
+    /// <summary>Tells the receiver what is streaming and what it may change (feature <see cref="Features.Configure"/>).</summary>
+    public void SendSettings(SettingsMessage settings) => EnqueueControl(settings);
 
     private void OnSourceFailed(Exception error) => _ = CloseAsync($"Errore nella cattura dello schermo: {error.Message}", ByeReasons.Error);
 
@@ -271,6 +312,12 @@ public sealed class SenderSession : IAsyncDisposable
                         break;
                     case StatsMessage stats:
                         _receiverFps = stats.Fps;
+                        break;
+                    case TouchMessage touch:
+                        TouchReceived?.Invoke(touch);
+                        break;
+                    case ConfigureMessage configure:
+                        ConfigureRequested?.Invoke(configure);
                         break;
                     case ByeMessage bye:
                         _ = CloseAsync(bye.Reason == ByeReasons.Replaced

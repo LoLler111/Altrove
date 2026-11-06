@@ -42,6 +42,15 @@ class ReceiverServer(
         if (connection.isOpen) connection.send(Messages.encode(message))
     }
 
+    /** Says goodbye to the sender and closes its connection; the server keeps listening. */
+    fun disconnect() {
+        val connection = active ?: return
+        if (connection.isOpen) {
+            connection.send(Messages.encode(Bye("user")))
+            connection.close()
+        }
+    }
+
     override fun onStart() = listener.onServerStarted(port)
 
     override fun onOpen(connection: WebSocket, handshake: ClientHandshake) {

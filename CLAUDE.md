@@ -14,6 +14,12 @@ Testi per l'utente in italiano, commenti e nomi nel codice in inglese (come in S
   sono binari in git). Il driver non scende sotto 1 monitor: il monitor non si elimina, si stacca dal desktop
   (`DisplaySettings.Detach`). `RELOAD_DRIVER` rilegge `vdd_settings.xml` al volo; la pipe accetta comandi ma non risponde.
 - Prima scelta sempre l'encoder hardware della GPU che pilota lo schermo; `ParameterSetCache` garantisce SPS/PPS davanti a ogni IDR.
+- L'encoder software scrive nel campione che gli passiamo: `H264Encoder` ne riusa uno solo. Uno nuovo per ogni
+  uscita non veniva liberato e mandava il processo fuori memoria in ~30 s (`altrove-cli stress encode` lo verifica).
+- Funzioni facoltative del protocollo (`features` nell'hello): `touch` (`Capture/Input/TouchInjector`, device di
+  tocco sintetico di Windows, ripete da sé la posizione di un dito fermo) e `configure` (il ricevitore cambia le
+  impostazioni: `MainViewModel.ConfigureAsync` → `StartStreamAsync` → `SenderSession.SwitchSourceAsync`, stessa connessione).
+- `ScreenVideoSource`: il fotogramma in conversione e lo smontaggio sono esclusivi (`_frameLock`).
 
 ## Test
 - `dotnet test tests/Altrove.Core.Tests`; Android: `./gradlew testDebugUnitTest` (JDK di Android Studio).
@@ -24,5 +30,8 @@ Testi per l'utente in italiano, commenti e nomi nel codice in inglese (come in S
   Il percorso hardware (GPU, AMF della RX 6750 XT) va provato sul PC fisso.
 - La VM si usa in sessione remota: il driver virtuale è installato lì, ma il suo monitor resta nella sessione
   console e non si vede. Attacco/stacco e cattura del monitor virtuale si provano solo sul fisso.
+- Prova del pannello e del tocco nell'emulatore: girarlo in orizzontale, avviare `Altrove.exe` con Start-Process
+  (un processo lanciato dentro un comando Bash muore con il comando) e guidarlo con UI Automation; sull'emulatore
+  `adb shell uiautomator dump` trova i pulsanti per testo. Gli errori dell'app finiscono in `%LOCALAPPDATA%\Altrove\altrove.log`.
 - Zip di prova per il fisso: `dotnet publish` autonomo (win-x64) di App e Cli in `artifacts/Altrove-prova`,
   più `tools/prova/*` e l'APK.

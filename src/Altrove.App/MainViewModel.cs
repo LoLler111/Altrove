@@ -1,6 +1,7 @@
 using System.Collections.ObjectModel;
 using System.Windows;
 using Altrove.Capture;
+using Altrove.Capture.Input;
 using Altrove.Capture.VirtualDisplay;
 using Altrove.Core.Discovery;
 using Altrove.Core.Protocol;
@@ -83,6 +84,7 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
         Select(BitrateChoices, BitrateChoices.FirstOrDefault(c => c.Value == _settings.BitrateMbps) ?? BitrateChoices[1]);
 
         _softwareEncoder = _settings.SoftwareEncoder;
+        _allowTouch = _settings.AllowTouch;
         SelectedReceiver = Receivers.FirstOrDefault(r => r.Id == _settings.LastReceiverId);
 
         _browser.Changed += found => Application.Current?.Dispatcher.BeginInvoke(() => Merge(found));
@@ -139,6 +141,16 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
     partial void OnSoftwareEncoderChanged(bool value)
     {
         _settings.SoftwareEncoder = value;
+        _settings.Save();
+    }
+
+    /// <summary>The receiver may work the PC by touch (taps become clicks on the streamed screen).</summary>
+    [ObservableProperty]
+    private bool _allowTouch;
+
+    partial void OnAllowTouchChanged(bool value)
+    {
+        _settings.AllowTouch = value;
         _settings.Save();
     }
 
@@ -249,9 +261,8 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
             ShowError("Nessuno schermo da trasmettere.");
             return;
         }
-        SaveChoices(receiver, monitor);
-        var extend = IsExtend;
-        if (extend && !await EnsureVirtualDisplayDriverAsync())
+        SaveChoices();
+        if (IsExtend && !await EnsureVirtualDisplayDriverAsync())
             return;
 
         State = SessionState.Connecting;
@@ -261,50 +272,198 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
         _connecting = new CancellationTokenSource();
         try
         {
+            List<string> features = [Features.Configure];
+            if (AllowTouch)
+                features.Add(Features.Touch);
             var self = new HelloMessage(AltroveProtocol.Version, Roles.Sender, _settings.DeviceId, Environment.MachineName,
-                typeof(MainViewModel).Assembly.GetName().Version?.ToString(3));
+                typeof(MainViewModel).Assembly.GetName().Version?.ToString(3), Features: features);
             var session = await SenderSession.ConnectAsync(ReceiverAddress.ToUri(receiver.Host, receiver.Port), self, _connecting.Token);
             _session = session;
-            if (session.Receiver.Name is { Length: > 0 } name)
-                receiver.Name = name;
-
-            var maxHeight = Selected(ResolutionChoices);
-            var fps = Selected(FpsChoices);
-            int width, height;
-            if (extend)
-            {
-                // A new monitor exactly the receiver's shape, streamed 1:1: no scaling, no black bars.
-                Status = $"Creo lo schermo virtuale per {receiver.Name}…";
-                var display = session.Receiver.Display;
-                var mode = VirtualMonitor.PlanMode(display?.Width ?? 1920, display?.Height ?? 1080,
-                    session.Receiver.MaxWidth ?? 1920, session.Receiver.MaxHeight ?? 1080, maxHeight > 0 ? maxHeight : null, fps);
-                _virtualAttached = true;
-                monitor = await VirtualMonitor.AttachAsync(mode, _connecting.Token);
-                (width, height) = (monitor.Width & ~1, monitor.Height & ~1);
-            }
-            else
-            {
-                (width, height) = session.PlanSize(monitor.Width, monitor.Height, maxHeight > 0 ? maxHeight : null);
-            }
-            var settings = new EncoderSettings(width, height, fps, Selected(BitrateChoices) * 1000);
+            _receiverName = receiver.Name = session.Receiver.Name is { Length: > 0 } name ? name : receiver.Name;
             session.StatsUpdated += OnStats;
             session.Closed += why => Application.Current?.Dispatcher.BeginInvoke(() => _ = StopAsync(why));
+            session.ConfigureRequested += request => Application.Current?.Dispatcher.BeginInvoke(() => _ = ConfigureAsync(request));
+            if (AllowTouch)
+            {
+                try
+                {
+                    _touch = new TouchInjector(monitor);
+                    session.TouchReceived += OnTouch;
+                }
+                catch (System.ComponentModel.Win32Exception)
+                {
+                    _touch = null; // Windows too old for synthetic touch: stream without it
+                }
+            }
 
-            _source = new ScreenVideoSource(monitor, SoftwareEncoder);
-            await session.StartAsync(_source, settings, extend ? StreamModes.Extend : StreamModes.Mirror, _connecting.Token);
+            await StartStreamAsync(session, _connecting.Token);
             State = SessionState.Streaming;
-            Status = extend
-                ? $"{receiver.Name} è un nuovo schermo a destra degli altri: {width}×{height}, {fps} fps · {_source.EncoderName}"
-                : $"In trasmissione su {receiver.Name}: {width}×{height}, {fps} fps · {_source.EncoderName}";
+        }
+        catch (OperationCanceledException) when (_connecting?.IsCancellationRequested == true)
+        {
+            await StopAsync("Collegamento annullato.");
         }
         catch (OperationCanceledException)
         {
-            await StopAsync("Collegamento annullato.");
+            // The connection's own timeout, not the user.
+            await StopAsync(null);
+            ShowError($"{receiver.Name} non ha risposto in tempo. Controlla che l'app Altrove sia aperta sul ricevitore.");
         }
         catch (Exception ex)
         {
             await StopAsync(null);
             ShowError(Describe(ex, receiver));
+        }
+    }
+
+    private string _receiverName = "";
+    private TouchInjector? _touch;
+    private readonly SemaphoreSlim _reconfiguring = new(1, 1);
+
+    private void OnTouch(TouchMessage touch) => _touch?.Inject(touch);
+
+    /// <summary>
+    /// Starts streaming with the choices as they are now, or switches the running stream to them: the old
+    /// source goes first, then the virtual monitor is attached, resized or detached, then the new source starts.
+    /// </summary>
+    private async Task StartStreamAsync(SenderSession session, CancellationToken token)
+    {
+        var extend = IsExtend;
+        var maxHeight = Selected(ResolutionChoices);
+        var fps = Selected(FpsChoices);
+        var previous = _source;
+        _source = null;
+        if (previous is not null)
+        {
+            session.DetachSource();
+            await previous.DisposeAsync();
+        }
+
+        MonitorInfo target;
+        int width, height;
+        if (extend)
+        {
+            // A new monitor exactly the receiver's shape, streamed 1:1: no scaling, no black bars.
+            Status = $"Creo lo schermo virtuale per {_receiverName}…";
+            var display = session.Receiver.Display;
+            var mode = VirtualMonitor.PlanMode(display?.Width ?? 1920, display?.Height ?? 1080,
+                session.Receiver.MaxWidth ?? 1920, session.Receiver.MaxHeight ?? 1080, maxHeight > 0 ? maxHeight : null, fps);
+            _virtualAttached = true;
+            target = await VirtualMonitor.AttachAsync(mode, token);
+            (width, height) = (target.Width & ~1, target.Height & ~1);
+        }
+        else
+        {
+            if (_virtualAttached)
+            {
+                _virtualAttached = false;
+                VirtualMonitor.Detach();
+            }
+            // Monitor handles do not survive a change of the desktop layout: look the screen up again.
+            var chosen = Selected(MonitorChoices)!;
+            target = Monitors.List().FirstOrDefault(m => m.DeviceName.Equals(chosen.DeviceName, StringComparison.OrdinalIgnoreCase)) ?? chosen;
+            (width, height) = session.PlanSize(target.Width, target.Height, maxHeight > 0 ? maxHeight : null);
+        }
+
+        var settings = new EncoderSettings(width, height, fps, Selected(BitrateChoices) * 1000);
+        var source = new ScreenVideoSource(target, SoftwareEncoder);
+        _source = source;
+        var streamMode = extend ? StreamModes.Extend : StreamModes.Mirror;
+        if (session.IsStarted)
+            await session.SwitchSourceAsync(source, settings, streamMode, token);
+        else
+            await session.StartAsync(source, settings, streamMode, token);
+        _touch?.SetTarget(target);
+        session.SendSettings(CurrentSettings(null));
+        Status = extend
+            ? $"{_receiverName} è un nuovo schermo a destra degli altri: {width}×{height}, {fps} fps · {source.EncoderName}"
+            : $"In trasmissione su {_receiverName}: {width}×{height}, {fps} fps · {source.EncoderName}";
+    }
+
+    /// <summary>What is streaming and what the receiver may change, for its settings panel.</summary>
+    private SettingsMessage CurrentSettings(string? notice)
+    {
+        List<string> modes = [StreamModes.Mirror];
+        if (VirtualMonitor.IsDriverInstalled && !VirtualMonitor.IsRemoteSession)
+            modes.Add(StreamModes.Extend);
+        return new SettingsMessage(
+            Selected(ModeChoices) ?? StreamModes.Mirror,
+            Selected(MonitorChoices)?.DeviceName,
+            Selected(ResolutionChoices),
+            Selected(FpsChoices),
+            Selected(BitrateChoices) * 1000,
+            new SettingsChoices(
+                modes,
+                MonitorChoices.Select(c => new ScreenChoice(c.Value.DeviceName, c.Label)).ToList(),
+                ResolutionChoices.Select(c => c.Value).ToList(),
+                FpsChoices.Select(c => c.Value).ToList(),
+                BitrateChoices.Select(c => c.Value * 1000).ToList()),
+            notice);
+    }
+
+    /// <summary>The receiver asked for other settings: apply them to the running stream, or put the old ones back.</summary>
+    private async Task ConfigureAsync(ConfigureMessage request)
+    {
+        await _reconfiguring.WaitAsync();
+        try
+        {
+            if (_session is not { } session || State != SessionState.Streaming)
+                return;
+            var before = (Mode: Selected(ModeChoices), Monitor: Selected(MonitorChoices), Height: Selected(ResolutionChoices),
+                Fps: Selected(FpsChoices), Mbps: Selected(BitrateChoices));
+
+            string? notice = null;
+            if (request.Mode is { } mode)
+            {
+                if (mode == StreamModes.Extend && !CurrentSettings(null).Choices.Modes.Contains(StreamModes.Extend))
+                    notice = "Sul PC lo schermo virtuale non è disponibile: attivalo una volta scegliendo Estendi in Altrove sul PC.";
+                else
+                    Select(ModeChoices, ModeChoices.FirstOrDefault(c => c.Value == mode));
+            }
+            if (request.Screen is { } screen)
+                Select(MonitorChoices, MonitorChoices.FirstOrDefault(c => c.Value.DeviceName == screen) ?? MonitorChoices.FirstOrDefault(c => c.IsSelected));
+            if (request.MaxHeight is { } height)
+                Select(ResolutionChoices, ResolutionChoices.FirstOrDefault(c => c.Value == height) ?? ResolutionChoices.First(c => c.IsSelected));
+            if (request.Fps is { } fps)
+                Select(FpsChoices, FpsChoices.FirstOrDefault(c => c.Value == fps) ?? FpsChoices.First(c => c.IsSelected));
+            if (request.BitrateKbps is { } kbps)
+                Select(BitrateChoices, BitrateChoices.FirstOrDefault(c => c.Value * 1000 == kbps) ?? BitrateChoices.First(c => c.IsSelected));
+
+            var after = (Mode: Selected(ModeChoices), Monitor: Selected(MonitorChoices), Height: Selected(ResolutionChoices),
+                Fps: Selected(FpsChoices), Mbps: Selected(BitrateChoices));
+            if (after == before)
+            {
+                session.SendSettings(CurrentSettings(notice));
+                return;
+            }
+            SaveChoices();
+            try
+            {
+                await StartStreamAsync(session, CancellationToken.None);
+            }
+            catch (Exception ex) when (ex is InvalidOperationException or OperationCanceledException
+                or SharpGen.Runtime.SharpGenException or System.Runtime.InteropServices.COMException)
+            {
+                // Back to what worked, and tell the receiver why.
+                Select(ModeChoices, ModeChoices.FirstOrDefault(c => c.Value == before.Mode));
+                Select(MonitorChoices, MonitorChoices.FirstOrDefault(c => c.Value == before.Monitor));
+                Select(ResolutionChoices, ResolutionChoices.FirstOrDefault(c => c.Value == before.Height));
+                Select(FpsChoices, FpsChoices.FirstOrDefault(c => c.Value == before.Fps));
+                Select(BitrateChoices, BitrateChoices.FirstOrDefault(c => c.Value == before.Mbps));
+                SaveChoices();
+                await StartStreamAsync(session, CancellationToken.None);
+                session.SendSettings(CurrentSettings($"Non sono riuscito a cambiare: {ex.Message}"));
+            }
+        }
+        catch (Exception ex)
+        {
+            App.Log($"Cambio impostazioni fallito: {ex}");
+            await StopAsync(null);
+            ShowError($"La trasmissione si è fermata cambiando le impostazioni: {ex.Message}");
+        }
+        finally
+        {
+            _reconfiguring.Release();
         }
     }
 
@@ -343,8 +502,11 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
         if (session is not null)
         {
             session.StatsUpdated -= OnStats;
+            session.TouchReceived -= OnTouch;
             await session.DisposeAsync();
         }
+        _touch?.Dispose();
+        _touch = null;
         if (source is not null)
             await source.DisposeAsync();
         if (_virtualAttached)
@@ -370,10 +532,12 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
         }
     }
 
-    private void SaveChoices(ReceiverItem receiver, MonitorInfo monitor)
+    private void SaveChoices()
     {
-        _settings.LastReceiverId = receiver.Id;
-        _settings.LastMonitor = monitor.DeviceName;
+        if (SelectedReceiver is { } receiver)
+            _settings.LastReceiverId = receiver.Id;
+        if (Selected(MonitorChoices) is { } monitor)
+            _settings.LastMonitor = monitor.DeviceName;
         _settings.MaxHeight = Selected(ResolutionChoices);
         _settings.Fps = Selected(FpsChoices);
         _settings.BitrateMbps = Selected(BitrateChoices);

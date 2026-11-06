@@ -32,7 +32,7 @@ public class ProtocolTests
     [Fact]
     public void Parse_returns_null_for_unknown_types_and_throws_for_garbage()
     {
-        Assert.Null(ControlMessage.Parse("{\"type\":\"touch\",\"x\":1}"));
+        Assert.Null(ControlMessage.Parse("{\"type\":\"future\",\"x\":1}"));
         Assert.ThrowsAny<JsonException>(() => ControlMessage.Parse("[1,2]"));
         Assert.ThrowsAny<JsonException>(() => ControlMessage.Parse("{\"no\":\"type\"}"));
     }
@@ -136,5 +136,50 @@ public class ProtocolTests
     {
         Assert.Equal("ws://[fe80::1]:47800/", ReceiverAddress.ToUri("fe80::1", 47800).ToString());
         Assert.Equal("ws://10.0.0.2:47800/", ReceiverAddress.ToUri("10.0.0.2", 47800).ToString());
+    }
+
+    // The same JSON as android/app/src/test/.../ProtocolTest.kt.
+
+    [Fact]
+    public void Hello_features()
+    {
+        var hello = Assert.IsType<HelloMessage>(ControlMessage.Parse(
+            "{\"type\":\"hello\",\"protocol\":1,\"role\":\"sender\",\"id\":\"pc\",\"name\":\"PC-FISSO\",\"features\":[\"touch\",\"configure\"]}"));
+        Assert.True(hello.Supports(Features.Touch));
+        Assert.True(hello.Supports(Features.Configure));
+        Assert.False(new HelloMessage(1, Roles.Sender, "pc", "PC").Supports(Features.Touch));
+    }
+
+    [Fact]
+    public void Touch_parses_what_the_receiver_writes()
+    {
+        var touch = Assert.IsType<TouchMessage>(ControlMessage.Parse(
+            "{\"type\":\"touch\",\"pointers\":[{\"id\":0,\"x\":0.25,\"y\":0.5,\"state\":\"down\"},{\"id\":1,\"x\":1.0,\"y\":0.0,\"state\":\"move\"}]}"));
+        Assert.Equal(new TouchPointer(0, 0.25, 0.5, TouchStates.Down), touch.Pointers[0]);
+        Assert.Equal(new TouchPointer(1, 1, 0, TouchStates.Move), touch.Pointers[1]);
+    }
+
+    [Fact]
+    public void Configure_carries_only_what_changes()
+    {
+        var configure = Assert.IsType<ConfigureMessage>(ControlMessage.Parse("{\"type\":\"configure\",\"mode\":\"extend\",\"maxHeight\":720}"));
+        Assert.Equal(new ConfigureMessage(Mode: StreamModes.Extend, MaxHeight: 720), configure);
+        Assert.Equal("{\"type\":\"configure\",\"fps\":30}", new ConfigureMessage(Fps: 30).ToJson());
+    }
+
+    [Fact]
+    public void Settings_round_trip()
+    {
+        var settings = new SettingsMessage(StreamModes.Mirror, "\\\\.\\DISPLAY1", 0, 60, 12000,
+            new SettingsChoices([StreamModes.Mirror, StreamModes.Extend], [new ScreenChoice("\\\\.\\DISPLAY1", "Schermo 1")], [0, 1080, 720], [60, 30], [6000, 12000]));
+        var json = settings.ToJson();
+        Assert.Equal(
+            "{\"type\":\"settings\",\"mode\":\"mirror\",\"screen\":\"\\\\\\\\.\\\\DISPLAY1\",\"maxHeight\":0,\"fps\":60,\"bitrateKbps\":12000," +
+            "\"choices\":{\"modes\":[\"mirror\",\"extend\"],\"screens\":[{\"id\":\"\\\\\\\\.\\\\DISPLAY1\",\"name\":\"Schermo 1\"}]," +
+            "\"maxHeights\":[0,1080,720],\"fps\":[60,30],\"bitratesKbps\":[6000,12000]}}", json);
+        var parsed = Assert.IsType<SettingsMessage>(ControlMessage.Parse(json));
+        Assert.Equal(settings.Screen, parsed.Screen);
+        Assert.Equal(settings.Choices.Screens, parsed.Choices.Screens);
+        Assert.Equal(settings.Choices.BitratesKbps, parsed.Choices.BitratesKbps);
     }
 }

@@ -57,6 +57,42 @@ public class SenderSessionTests
     }
 
     [Fact]
+    public async Task Touch_configure_and_a_new_source_without_reconnecting()
+    {
+        await using var receiver = await FakeReceiver.StartAsync();
+        await using var session = await SenderSession.ConnectAsync(receiver.Uri, Sender, CancellationToken.None);
+        var touches = new System.Collections.Concurrent.ConcurrentQueue<TouchMessage>();
+        var requests = new System.Collections.Concurrent.ConcurrentQueue<ConfigureMessage>();
+        session.TouchReceived += touches.Enqueue;
+        session.ConfigureRequested += requests.Enqueue;
+
+        var first = new FakeSource();
+        await session.StartAsync(first, new EncoderSettings(1920, 1080, 60, 8000), StreamModes.Mirror, CancellationToken.None);
+        Assert.IsType<HelloMessage>(await receiver.NextControlAsync());
+        Assert.IsType<StartMessage>(await receiver.NextControlAsync(skipPings: true));
+        session.SendSettings(new SettingsMessage(StreamModes.Mirror, null, 0, 60, 8000, new SettingsChoices([StreamModes.Mirror], [], [0], [60], [8000])));
+        Assert.IsType<SettingsMessage>(await receiver.NextControlAsync(skipPings: true));
+
+        await receiver.SendAsync(new TouchMessage([new TouchPointer(3, 0.5, 0.5, TouchStates.Down)]));
+        await receiver.SendAsync(new ConfigureMessage(Mode: StreamModes.Extend));
+        await WaitUntil(() => !touches.IsEmpty && !requests.IsEmpty);
+        Assert.Equal(3, touches.Single().Pointers.Single().Id);
+        Assert.Equal(StreamModes.Extend, requests.Single().Mode);
+
+        var second = new FakeSource();
+        await session.SwitchSourceAsync(second, new EncoderSettings(1920, 1200, 60, 8000), StreamModes.Extend, CancellationToken.None);
+        var start = Assert.IsType<StartMessage>(await receiver.NextControlAsync(skipPings: true));
+        Assert.Equal((1920, 1200, StreamModes.Extend), (start.Width, start.Height, start.Mode));
+
+        // The old source is no longer heard; the new one's deltas wait for its first IDR.
+        first.Emit(Idr(10));
+        second.Emit(Delta(11));
+        second.Emit(Idr(12));
+        Assert.True(VideoPacket.TryDecode(await receiver.NextVideoAsync(), out _, out var pts, out _));
+        Assert.Equal(12, pts);
+    }
+
+    [Fact]
     public async Task Receiver_with_another_protocol_is_refused()
     {
         await using var receiver = await FakeReceiver.StartAsync(protocol: 99);

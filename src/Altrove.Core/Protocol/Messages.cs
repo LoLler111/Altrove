@@ -24,6 +24,9 @@ public sealed record DisplayInfo(int Width, int Height, double RefreshRate);
 [JsonDerivedType(typeof(PongMessage), "pong")]
 [JsonDerivedType(typeof(StatsMessage), "stats")]
 [JsonDerivedType(typeof(ByeMessage), "bye")]
+[JsonDerivedType(typeof(SettingsMessage), "settings")]
+[JsonDerivedType(typeof(ConfigureMessage), "configure")]
+[JsonDerivedType(typeof(TouchMessage), "touch")]
 public abstract record ControlMessage
 {
     private static readonly JsonSerializerOptions Options = new(JsonSerializerDefaults.Web)
@@ -50,7 +53,7 @@ public abstract record ControlMessage
     }
 
     private static readonly HashSet<string> KnownTypes =
-        ["hello", "start", "stop", "keyframe", "ping", "pong", "stats", "bye"];
+        ["hello", "start", "stop", "keyframe", "ping", "pong", "stats", "bye", "settings", "configure", "touch"];
 }
 
 public static class Roles
@@ -63,6 +66,24 @@ public static class StreamModes
 {
     public const string Mirror = "mirror";
     public const string Extend = "extend";
+}
+
+/// <summary>Optional abilities a peer lists in its hello (docs/PROTOCOLLO.md, "features").</summary>
+public static class Features
+{
+    /// <summary>The sender accepts touch messages.</summary>
+    public const string Touch = "touch";
+
+    /// <summary>The sender sends settings and accepts configure.</summary>
+    public const string Configure = "configure";
+}
+
+public static class TouchStates
+{
+    public const string Down = "down";
+    public const string Move = "move";
+    public const string Up = "up";
+    public const string Cancel = "cancel";
 }
 
 public static class ByeReasons
@@ -82,7 +103,11 @@ public sealed record HelloMessage(
     DisplayInfo? Display = null,
     IReadOnlyList<string>? Codecs = null,
     int? MaxWidth = null,
-    int? MaxHeight = null) : ControlMessage;
+    int? MaxHeight = null,
+    IReadOnlyList<string>? Features = null) : ControlMessage
+{
+    public bool Supports(string feature) => Features?.Contains(feature) == true;
+}
 
 public sealed record StartMessage(string Codec, int Width, int Height, int Fps, string Mode) : ControlMessage;
 
@@ -97,3 +122,37 @@ public sealed record PongMessage(long T) : ControlMessage;
 public sealed record StatsMessage(double Fps, double? DecodeMs = null, int? Dropped = null) : ControlMessage;
 
 public sealed record ByeMessage(string Reason) : ControlMessage;
+
+public sealed record ScreenChoice(string Id, string Name);
+
+/// <summary>What a receiver may ask for in <see cref="ConfigureMessage"/>.</summary>
+public sealed record SettingsChoices(
+    IReadOnlyList<string> Modes,
+    IReadOnlyList<ScreenChoice> Screens,
+    IReadOnlyList<int> MaxHeights,
+    IReadOnlyList<int> Fps,
+    IReadOnlyList<int> BitratesKbps);
+
+/// <summary>What is being streamed, and what the receiver can change. <c>MaxHeight</c> 0 means automatic.</summary>
+public sealed record SettingsMessage(
+    string Mode,
+    string? Screen,
+    int MaxHeight,
+    int Fps,
+    int BitrateKbps,
+    SettingsChoices Choices,
+    string? Notice = null) : ControlMessage;
+
+/// <summary>A receiver's request to change some settings; null fields stay as they are.</summary>
+public sealed record ConfigureMessage(
+    string? Mode = null,
+    string? Screen = null,
+    int? MaxHeight = null,
+    int? Fps = null,
+    int? BitrateKbps = null) : ControlMessage;
+
+/// <summary>One finger on the receiver's screen, at a position on the streamed image from 0 to 1.</summary>
+public sealed record TouchPointer(int Id, double X, double Y, string State);
+
+/// <summary>Every finger touching the receiver right now, sent at each change.</summary>
+public sealed record TouchMessage(IReadOnlyList<TouchPointer> Pointers) : ControlMessage;

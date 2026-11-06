@@ -55,6 +55,20 @@ Il ricevitore risponde con il suo `hello`, che dice anche cosa sa mostrare:
 
 Se `protocol` dell'altro è diverso dal proprio, si chiude con `bye` e `reason: "protocol"`.
 
+#### Funzioni facoltative (`features`)
+Nel proprio `hello` ciascun lato può elencare le funzioni facoltative che gestisce:
+```json
+{ "type": "hello", "protocol": 1, "role": "sender", "id": "…", "name": "PC-FISSO", "app": "0.2.0",
+  "features": ["touch", "configure"] }
+```
+| Funzione | Chi la annuncia | Cosa vuol dire |
+|---|---|---|
+| `touch` | trasmettitore | accetta i messaggi `touch`: il ricevitore può comandare il PC con il tocco |
+| `configure` | trasmettitore | manda `settings` e accetta `configure`: il ricevitore può cambiare modalità e qualità |
+
+Un messaggio facoltativo si manda solo se l'altro lato ha annunciato la funzione. Chi non manda
+`features` (le versioni 0.1) non ne gestisce nessuna. Le funzioni nuove non cambiano `protocol`.
+
 ### `start` — trasmettitore → ricevitore
 ```json
 { "type": "start", "codec": "h264", "width": 1920, "height": 1080, "fps": 60, "mode": "mirror" }
@@ -86,6 +100,47 @@ Serve a misurare il tempo di andata e ritorno.
 { "type": "stop" }
 ```
 Fine della trasmissione; la connessione può restare aperta per un nuovo `start`.
+
+### `settings` — trasmettitore → ricevitore (funzione `configure`)
+```json
+{ "type": "settings", "mode": "mirror", "screen": "\\\\.\\DISPLAY1", "maxHeight": 0, "fps": 60, "bitrateKbps": 12000,
+  "choices": {
+    "modes": ["mirror", "extend"],
+    "screens": [{ "id": "\\\\.\\DISPLAY1", "name": "Schermo 1 – 3440×1440" }],
+    "maxHeights": [0, 1080, 720], "fps": [60, 30], "bitratesKbps": [6000, 12000, 20000, 30000] },
+  "notice": "…" }
+```
+Cosa si sta trasmettendo e cosa il ricevitore può chiedere. Arriva dopo ogni `start` e ogni volta che
+qualcosa cambia.
+- `maxHeight`: il limite di risoluzione scelto, `0` = automatica (lo schermo del ricevitore).
+- `screen`: lo schermo duplicato (in `extend` è quello di prima, per tornare in `mirror`).
+- `choices.modes` contiene `extend` solo se sul PC lo schermo virtuale è installato.
+- `notice` (facoltativo): un testo per l'utente, es. perché l'ultima richiesta non è stata applicata.
+
+### `configure` — ricevitore → trasmettitore (funzione `configure`)
+```json
+{ "type": "configure", "mode": "extend", "maxHeight": 720 }
+```
+Solo i campi da cambiare, fra `mode`, `screen`, `maxHeight`, `fps`, `bitrateKbps`, con valori presi da
+`choices`. Il trasmettitore applica senza chiudere la connessione: manda un nuovo `start` (il
+ricevitore fa ripartire il decoder) e un nuovo `settings`. Se non può, rimanda il `settings` di prima
+con un `notice`.
+
+### `touch` — ricevitore → trasmettitore (funzione `touch`)
+```json
+{ "type": "touch", "pointers": [{ "id": 0, "x": 0.4182, "y": 0.625, "state": "down" }] }
+```
+Un messaggio a ogni cambiamento, con tutte le dita appoggiate in quel momento.
+- `x`, `y`: posizione sull'immagine del flusso, da 0 a 1, con 0,0 in alto a sinistra. Non dipende dalla
+  risoluzione né dalle bande nere: il ricevitore conta solo i tocchi sull'immagine.
+- `id`: lo stesso finché il dito resta appoggiato.
+- `state`: `down` (appena appoggiato), `move`, `up` (appena sollevato: compare in questo messaggio e
+  poi non più), `cancel` (gesto annullato, per tutte le dita insieme).
+
+Il trasmettitore Windows li trasforma in tocco di Windows sullo schermo trasmesso (in `mirror`) o sul
+monitor virtuale (in `extend`): un tocco è un clic, tenere premuto è il clic destro, due dita scorrono e
+ingrandiscono dove l'applicazione lo gestisce. Mentre un dito è fermo il trasmettitore ripete da sé
+l'ultima posizione, così Windows non considera il tocco interrotto: il ricevitore non deve farlo.
 
 ### `bye` — entrambi
 ```json

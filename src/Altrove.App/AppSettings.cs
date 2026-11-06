@@ -15,6 +15,7 @@ public sealed class AppSettings
     public int BitrateMbps { get; set; } = 12;
     public bool SoftwareEncoder { get; set; }
     public string Mode { get; set; } = "mirror";
+    public bool AllowTouch { get; set; } = true;
 
     private static readonly JsonSerializerOptions Options = new() { WriteIndented = true };
 

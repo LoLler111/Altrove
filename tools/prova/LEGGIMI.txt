@@ -32,3 +32,16 @@ trasmissione e un'impressione sul ritardo (prova a muovere il mouse).
    Crea risultato-estendi.txt ed estendi-test.bmp: mandameli.
    Nell'app, scegli "Estendi" e Trasmetti: il tablet diventa un monitor in piu'.
    Per togliere il driver: altrove-cli.exe vdd-uninstall
+
+4) TOCCO E PANNELLO DAL TABLET (versione 0.2)
+   Installa di nuovo Altrove-ricevitore.apk sul Tab A: si aggiorna sopra il vecchio.
+   Sul PC lascia spuntato "Usa il PC con il tocco dal ricevitore" e premi Trasmetti.
+   - Tocco sull'immagine = clic; tenere premuto = clic destro; trascinare = sposta;
+     due dita = scorrere dove l'app lo permette (browser, Esplora file).
+   - La linguetta grigia sul bordo sinistro (o il tasto Indietro) apre il pannello:
+     cambia risoluzione, fps e qualita', e passa da Duplica a Estendi e ritorno.
+     Dopo ogni scelta il PC riparte in un paio di secondi senza staccarsi.
+   - Prova a girare per casa con il tablet: se l'immagine scatta, abbassa qualita'
+     o fps dal pannello.
+   Da mandare: cosa non ha funzionato o era scomodo; se l'app sul PC si chiude o
+   segnala un errore, il file %LOCALAPPDATA%\Altrove\altrove.log (se c'e').

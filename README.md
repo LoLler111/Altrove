@@ -6,17 +6,18 @@ Altrove proietta lo schermo del PC Windows su tablet, telefoni, TV e chiavette T
 Il PC cattura lo schermo, lo comprime in H.264 con l'encoder della scheda video e lo manda sulla rete
 locale a un'app ricevitore. Non serve Miracast e funziona anche con un PC collegato via cavo.
 
-## Stato: fase 1
+## Stato
 
 | Pezzo | Stato |
 |---|---|
 | Protocollo comune ([docs/PROTOCOLLO.md](docs/PROTOCOLLO.md)) | fatto |
 | App Windows: duplica uno schermo verso un ricevitore | fatto |
 | App Android: ricevitore (tablet, telefono, Fire TV con Fire OS) | fatto |
-| Schermo virtuale ed estensione (fase 2) | scritto, da provare sul PC fisso |
+| Schermo virtuale ed estensione (fase 2) | provato sul PC fisso; manca la prova con il tablet |
+| Dal tablet: tocco verso il PC e pannello delle impostazioni (fase 5) | provato nell'emulatore; manca la prova con il tablet |
+| Dal tablet: audio del PC, microfono del tablet (fase 5) | da fare |
 | Ricevitore web per Chromecast e TV LG webOS (fase 3) | da fare |
 | App Android come trasmettitore (fase 4) | da fare |
-| Tocco dal tablet verso il PC, audio (fase 5) | da fare |
 
 ## Struttura
 
@@ -54,7 +55,18 @@ L'APK di prova finisce in `android/app/build/outputs/apk/debug/app-debug.apk`.
 1. Installa l'APK sul tablet o sulla Fire TV e aprilo: mostra «Pronto a ricevere» e il suo indirizzo.
 2. Avvia `Altrove.exe` sul PC: il ricevitore compare da solo nell'elenco. Se non compare, scrivi
    l'indirizzo mostrato dal ricevitore.
-3. Scegli schermo e qualità, poi premi **Trasmetti**. Un tocco sul ricevitore mostra fps e tempi di decodifica.
+3. Scegli schermo e qualità, poi premi **Trasmetti**.
+
+### Dal tablet
+
+- **Tocco**: con «Usa il PC con il tocco dal ricevitore» attivo sul PC, un tocco sull'immagine è un clic,
+  tenere premuto è il clic destro, trascinare sposta, due dita scorrono dove l'applicazione lo gestisce.
+  Funziona in Duplica e in Estendi, anche su PC senza schermo touch. Windows non lascia toccare le finestre
+  aperte come amministratore né le richieste di permesso (UAC).
+- **Pannello**: la linguetta sul bordo sinistro, o il tasto Indietro, apre il pannello. Da lì si cambiano
+  modalità, schermo, risoluzione, fluidità e qualità senza staccarsi: il PC riparte con le nuove impostazioni
+  in un paio di secondi e se le ricorda. Il pannello mostra anche fps e tempi di decodifica e ha il pulsante per
+  interrompere. Senza tocco (o con il tocco spento nel pannello) basta toccare lo schermo per aprirlo.
 
 La prima volta Windows può chiedere di permettere ad Altrove l'accesso alla rete: va consentito per le reti private.
 
@@ -68,10 +80,12 @@ La prima volta Windows può chiedere di permettere ad Altrove l'accesso alla ret
 | `altrove-cli send 192.168.1.20` | Trasmette a un ricevitore e stampa le statistiche ogni secondo |
 | `altrove-cli fake-receiver --port 47811` | Un ricevitore finto su localhost che conta cosa arriva |
 | `altrove-cli announce --port 47811` | Fa annunciare a Windows un ricevitore di prova, per testare la ricerca |
-| `altrove-cli analyze file.h264` | Conta le unità NAL per tipo e quanto del flusso è riempitivo |
+| `altrove-cli analyze file.h264` | Conta le unità NAL per tipo e quanto del flusso è riempitivo; lo ridecodifica e salva il primo fotogramma come `.bmp` |
 | `altrove-cli vdd-install` / `vdd-uninstall` | Installa o toglie il driver dello schermo virtuale (chiede i permessi di amministratore) |
 | `altrove-cli extend --display 1920x1200` | Attacca lo schermo virtuale a quella misura, lo registra come `record` e lo stacca |
 | `altrove-cli vdd [COMANDO]` | Stato del driver e dei display; manda un comando alla sua pipe (es. `RELOAD_DRIVER`) |
+| `altrove-cli touch 0.5,0.5 [--seconds 2]` | Un tocco (o una pressione lunga) come lo manderebbe il ricevitore, a x,y da 0 a 1 sullo schermo `--monitor N` |
+| `altrove-cli stress capture\|convert\|encode --seconds 60` | Un pezzo della catena da solo per un minuto, per cercare perdite e crash |
 
 ### Schermo virtuale (Estendi)
 

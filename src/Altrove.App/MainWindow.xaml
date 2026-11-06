@@ -137,6 +137,12 @@
                         <TextBlock FontSize="11.5" Foreground="{StaticResource TextDimBrush}" TextWrapping="Wrap" Margin="0,4,0,0"
                                    Visibility="{Binding IsExtend, Converter={StaticResource Visible}}"
                                    Text="Il ricevitore diventa un nuovo monitor, a destra degli altri e della stessa misura del suo schermo: trascinaci le finestre. Sparisce quando fermi la trasmissione." />
+                        <CheckBox IsChecked="{Binding AllowTouch}" Margin="0,12,0,0"
+                                  ToolTip="Un tocco sul tablet è un clic sullo schermo trasmesso, tenere premuto è il clic destro.">
+                            <TextBlock Text="Usa il PC con il tocco dal ricevitore" />
+                        </CheckBox>
+                        <TextBlock FontSize="11.5" Foreground="{StaticResource TextDimBrush}" TextWrapping="Wrap" Margin="0,4,0,0"
+                                   Text="Dal ricevitore si possono anche cambiare modalità e qualità durante la trasmissione." />
                     </StackPanel>
                 </Border>
                 <Border Style="{StaticResource Card}" Margin="0">

@@ -37,6 +37,8 @@ try
         "vdd" => Vdd(options),
         "extend" => await Extend(options),
         "vdd-detach" => VddDetach(),
+        "touch" => await Touch(options, args.Contains("--seconds")),
+        "stress" => await Stress(options),
         _ => Usage(),
     };
 }
@@ -50,6 +52,84 @@ static int Usage()
 {
     Console.WriteLine("Comandi: list | record | discover | send <host[:port]> | fake-receiver");
     return 2;
+}
+
+static async Task<int> Touch(Options options, bool hold)
+{
+    // A press of --seconds (default 0: a tap) at x,y from 0 to 1 on the chosen monitor, as a receiver would send it.
+    var monitor = PickMonitor(options);
+    var xy = (options.Positional ?? "0.5,0.5").Split(',').Select(v => double.Parse(v, System.Globalization.CultureInfo.InvariantCulture)).ToArray();
+    using var touch = new Altrove.Capture.Input.TouchInjector(monitor);
+    Console.WriteLine($"Tocco su {monitor.DisplayName} a x {xy[0]:0.###}, y {xy[1]:0.###}" + (hold ? $" per {options.Seconds} s" : ""));
+    touch.Inject(new TouchMessage([new TouchPointer(0, xy[0], xy[1], TouchStates.Down)]));
+    await Task.Delay(TimeSpan.FromSeconds(hold ? Math.Max(options.Seconds, 0) : 0) + TimeSpan.FromMilliseconds(60));
+    touch.Inject(new TouchMessage([new TouchPointer(0, xy[0], xy[1], TouchStates.Up)]));
+    Console.WriteLine(touch.Failures == 0 ? "Windows ha accettato il tocco." : $"Windows ha rifiutato {touch.Failures} invii (finestra con permessi di amministratore in primo piano?).");
+    return touch.Failures == 0 ? 0 : 1;
+}
+
+static async Task<int> Stress(Options options)
+{
+    // Pieces of the pipeline alone, for --seconds: "capture", "convert" (capture + NV12) or "encode" (made-up frames).
+    var what = options.Positional ?? "capture";
+    var monitor = PickMonitor(options);
+    using var device = GraphicsDevice.CreateFor(monitor);
+    var (w, h) = (monitor.Width & ~1, monitor.Height & ~1);
+    long frames = 0, encoded = 0;
+    INv12Converter? converter = what == "convert" ? Nv12Converters.Create(device, w, h) : null;
+    H264Encoder? encoder = null;
+    ScreenCapture? capture = null;
+    if (what == "encode")
+    {
+        encoder = H264Encoder.Create(device, new EncoderSettings(w, h, options.Fps, options.Kbps), false, options.Software);
+        encoder.FrameEncoded += _ => Interlocked.Increment(ref encoded);
+        encoder.Failed += ex => Console.Error.WriteLine($"Errore encoder: {ex.Message}");
+        encoder.Start();
+    }
+    else
+    {
+        capture = new ScreenCapture(device, monitor);
+        capture.FrameArrived += (texture, _) =>
+        {
+            Interlocked.Increment(ref frames);
+            if (converter is not null)
+            {
+                var d = texture.Description;
+                converter.Convert(texture, (int)d.Width, (int)d.Height);
+            }
+        };
+        capture.Start();
+    }
+    Console.WriteLine($"Prova {what} per {options.Seconds} s su {monitor.DisplayName}{(converter is null ? "" : ", conversione " + converter.Name)}{(encoder is null ? "" : ", " + encoder.Name)}");
+    var ring = Enumerable.Range(0, 3).Select(_ => new Nv12Frame { Width = w, Height = h, Bytes = new byte[w * h * 3 / 2] }).ToArray();
+    var clock = Stopwatch.StartNew();
+    var next = TimeSpan.Zero;
+    var n = 0;
+    while (clock.Elapsed < TimeSpan.FromSeconds(options.Seconds))
+    {
+        if (encoder is not null)
+        {
+            var frame = ring[n % 3];
+            Random.Shared.NextBytes(frame.Bytes!.AsSpan(0, w * 64));
+            Array.Fill(frame.Bytes!, (byte)(n * 5), w * 64, w * 32);
+            encoder.Submit(frame, clock.Elapsed.Ticks);
+            n++;
+            frames = n;
+            next += TimeSpan.FromSeconds(1.0 / options.Fps);
+            var wait = next - clock.Elapsed;
+            if (wait > TimeSpan.Zero)
+                await Task.Delay(wait);
+        }
+        else
+            await Task.Delay(1000);
+        if ((int)clock.Elapsed.TotalSeconds % 10 == 0 && clock.Elapsed.TotalSeconds >= 1 && encoder is null)
+            Console.WriteLine($"  {clock.Elapsed.TotalSeconds:0} s: {frames} fotogrammi");
+    }
+    capture?.Dispose();
+    encoder?.Dispose();
+    converter?.Dispose();
+    Console.WriteLine($"Fine: {frames} fotogrammi, {encoded} codificati");
+    return 0;
 }
 
 static int List()
@@ -223,6 +303,21 @@ static int Analyze(Options options)
     var filler = Altrove.Core.Video.H264.FillerBytes(data);
     Console.WriteLine($"{data.Length / 1024} KiB; NAL per tipo: {string.Join(", ", counts)}");
     Console.WriteLine($"Riempitivo: {filler / 1024} KiB ({filler * 100.0 / data.Length:0}%)");
+
+    // Decode it too, cutting access units at each access unit delimiter (NAL type 9).
+    var starts = new List<int>();
+    for (var i = 0; i + 3 < data.Length; i++)
+    {
+        if (data[i] == 0 && data[i + 1] == 0 && data[i + 2] == 1 && (data[i + 3] & 0x1F) == 9)
+            starts.Add(i > 0 && data[i - 1] == 0 ? i - 1 : i);
+    }
+    if (starts.Count == 0)
+        starts.Add(0);
+    var units = starts.Select((start, n) => data[start..(n + 1 < starts.Count ? starts[n + 1] : data.Length)]).ToList();
+    var snapshot = Path.ChangeExtension(options.Positional ?? options.Out, ".bmp");
+    var result = H264Verifier.Decode(units, snapshot);
+    Console.WriteLine($"Verifica con {result.Decoder}: decodificati {result.FramesDecoded}/{units.Count}, {result.Width}×{result.Height}");
+    Console.WriteLine($"Primo fotogramma decodificato: {snapshot}");
     return 0;
 }
 

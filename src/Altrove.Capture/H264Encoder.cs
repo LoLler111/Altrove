@@ -568,21 +568,34 @@ public sealed class H264Encoder : IDisposable
         }
     }
 
+    // For encoders that write into the caller's sample (the software one): one sample, reused for every
+    // output. A fresh 3 MB buffer per call was never given back and ran the process out of memory.
+    private IMFSample? _outputSample;
+    private IMFMediaBuffer? _outputBuffer;
+
     private void DrainOutput(bool single)
     {
         while (true)
         {
             var info = _transform.GetOutputStreamInfo(0);
             var providesSamples = (info.Flags & (OutputProvidesSamples | OutputCanProvideSamples)) != 0;
-            IMFSample? allocated = null;
+            IMFSample? ours = null;
             if (!providesSamples)
             {
-                allocated = MediaFactory.MFCreateSample();
-                using var buffer = MediaFactory.MFCreateMemoryBuffer(Math.Max(info.Size, _settings.Width * _settings.Height * 3 / 2));
-                allocated.AddBuffer(buffer);
+                var size = Math.Max(info.Size, _settings.Width * _settings.Height * 3 / 2);
+                if (_outputBuffer is null || _outputBuffer.MaxLength < size)
+                {
+                    _outputSample?.Dispose();
+                    _outputBuffer?.Dispose();
+                    _outputBuffer = MediaFactory.MFCreateMemoryBuffer(size);
+                    _outputSample = MediaFactory.MFCreateSample();
+                    _outputSample.AddBuffer(_outputBuffer);
+                }
+                _outputBuffer.CurrentLength = 0;
+                ours = _outputSample;
             }
 
-            var output = new OutputDataBuffer { StreamID = 0, Sample = allocated! };
+            var output = new OutputDataBuffer { StreamID = 0, Sample = ours! };
             var result = _transform.ProcessOutput(ProcessOutputFlags.None, 1, ref output, out _);
             output.Events?.Dispose();
             try
@@ -602,9 +615,9 @@ public sealed class H264Encoder : IDisposable
             }
             finally
             {
-                if (output.Sample is not null && !ReferenceEquals(output.Sample, allocated))
-                    output.Sample.Dispose();
-                allocated?.Dispose();
+                // A sample the encoder made is ours to release; our own reused one stays.
+                if (output.Sample is { } returned && !ReferenceEquals(returned, ours) && returned.NativePointer != ours?.NativePointer)
+                    returned.Dispose();
             }
             if (single)
                 return;
@@ -671,6 +684,8 @@ public sealed class H264Encoder : IDisposable
         if (_codecApi != IntPtr.Zero)
             Marshal.Release(_codecApi);
         _readback?.Dispose();
+        _outputSample?.Dispose();
+        _outputBuffer?.Dispose();
         _events?.Dispose();
         _transform.Dispose();
         try

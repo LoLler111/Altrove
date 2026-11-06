@@ -35,7 +35,10 @@ data class Hello(
     val codecs: List<String>? = null,
     val maxWidth: Int? = null,
     val maxHeight: Int? = null,
-) : ControlMessage()
+    val features: List<String>? = null,
+) : ControlMessage() {
+    fun supports(feature: String) = features?.contains(feature) == true
+}
 
 @Serializable
 @SerialName("start")
@@ -65,8 +68,75 @@ data class Stats(val fps: Double, val decodeMs: Double? = null, val dropped: Int
 @SerialName("bye")
 data class Bye(val reason: String) : ControlMessage()
 
+/** Optional abilities a peer lists in its hello (docs/PROTOCOLLO.md, "features"). */
+object Features {
+    /** The sender accepts touch messages. */
+    const val TOUCH = "touch"
+
+    /** The sender sends settings and accepts configure. */
+    const val CONFIGURE = "configure"
+}
+
+object TouchStates {
+    const val DOWN = "down"
+    const val MOVE = "move"
+    const val UP = "up"
+    const val CANCEL = "cancel"
+}
+
+object StreamModes {
+    const val MIRROR = "mirror"
+    const val EXTEND = "extend"
+}
+
+@Serializable
+data class ScreenChoice(val id: String, val name: String)
+
+/** What the receiver may ask for in [Configure]. */
+@Serializable
+data class SettingsChoices(
+    val modes: List<String>,
+    val screens: List<ScreenChoice>,
+    val maxHeights: List<Int>,
+    val fps: List<Int>,
+    val bitratesKbps: List<Int>,
+)
+
+/** What the sender is streaming and what can be changed; [maxHeight] 0 means automatic. */
+@Serializable
+@SerialName("settings")
+data class StreamSettings(
+    val mode: String,
+    val screen: String? = null,
+    val maxHeight: Int,
+    val fps: Int,
+    val bitrateKbps: Int,
+    val choices: SettingsChoices,
+    val notice: String? = null,
+) : ControlMessage()
+
+/** A request to change some settings; null fields stay as they are. */
+@Serializable
+@SerialName("configure")
+data class Configure(
+    val mode: String? = null,
+    val screen: String? = null,
+    val maxHeight: Int? = null,
+    val fps: Int? = null,
+    val bitrateKbps: Int? = null,
+) : ControlMessage()
+
+/** One finger, at a position on the streamed image from 0 to 1. */
+@Serializable
+data class TouchPointer(val id: Int, val x: Double, val y: Double, val state: String)
+
+/** Every finger on the screen right now, sent at each change. */
+@Serializable
+@SerialName("touch")
+data class Touch(val pointers: List<TouchPointer>) : ControlMessage()
+
 object Messages {
-    private val known = setOf("hello", "start", "stop", "keyframe", "ping", "pong", "stats", "bye")
+    private val known = setOf("hello", "start", "stop", "keyframe", "ping", "pong", "stats", "bye", "settings", "configure", "touch")
 
     val json = Json {
         classDiscriminator = "type"
