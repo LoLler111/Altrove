@@ -4,7 +4,7 @@
         xmlns:local="clr-namespace:Altrove.App"
         Title="Altrove" Width="900" Height="700" MinWidth="720" MinHeight="560"
         Background="{StaticResource BgBrush}" FontFamily="Segoe UI Variable Text, Segoe UI" FontSize="13"
-        WindowStartupLocation="CenterScreen">
+        WindowStartupLocation="CenterScreen" Icon="Assets/Altrove.ico">
     <Window.Resources>
         <BooleanToVisibilityConverter x:Key="Visible" />
 
@@ -39,9 +39,13 @@
                 <TextBlock Text="{Binding AppVersion}" Foreground="{StaticResource TextDimBrush}" FontSize="11.5"
                            HorizontalAlignment="Right" Margin="0,4,2,0" />
             </StackPanel>
-            <StackPanel>
-                <TextBlock Text="Altrove" FontSize="26" FontWeight="SemiBold" />
-                <TextBlock Text="Il tuo schermo, altrove." Foreground="{StaticResource TextDimBrush}" />
+            <StackPanel Orientation="Horizontal">
+                <Image Source="Assets/Altrove-64.png" Width="44" Height="44" Margin="0,0,12,0" VerticalAlignment="Center"
+                       RenderOptions.BitmapScalingMode="HighQuality" />
+                <StackPanel VerticalAlignment="Center">
+                    <TextBlock Text="Altrove" FontSize="26" FontWeight="SemiBold" />
+                    <TextBlock Text="Il tuo schermo, altrove." Foreground="{StaticResource TextDimBrush}" />
+                </StackPanel>
             </StackPanel>
         </DockPanel>
 
@@ -153,6 +157,10 @@
                         <CheckBox IsChecked="{Binding SendAudio}" Margin="0,8,0,0"
                                   ToolTip="Quello che il PC sta suonando arriva anche al ricevitore. Si accende e si spegne anche dal pannello del ricevitore.">
                             <TextBlock Text="Manda l'audio del PC al ricevitore" />
+                        </CheckBox>
+                        <CheckBox IsChecked="{Binding UseTabletMic}" Margin="0,8,0,0"
+                                  ToolTip="La voce del microfono del tablet diventa «Microfono Altrove» in Windows: sceglilo come microfono in Teams, Discord, Zoom. La prima volta installa usbip-win2.">
+                            <TextBlock Text="Usa il microfono del ricevitore («Microfono Altrove»)" />
                         </CheckBox>
                         <TextBlock FontSize="11.5" Foreground="{StaticResource TextDimBrush}" TextWrapping="Wrap" Margin="0,4,0,0"
                                    Text="Dal ricevitore si possono anche cambiare modalità e qualità durante la trasmissione." />

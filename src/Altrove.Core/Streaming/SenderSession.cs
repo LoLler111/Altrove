@@ -121,6 +121,20 @@ public sealed class SenderSession : IAsyncDisposable
     /// <summary>Raised on a network thread for every mouse message (only if the hello announced <see cref="Features.Mouse"/>).</summary>
     public event Action<MouseMessage>? MouseReceived;
 
+    /// <summary>The receiver started sending its microphone in this format (feature <see cref="Features.Mic"/>).</summary>
+    public event Action<MicStartMessage>? MicStarted;
+
+    public event Action? MicStopped;
+
+    /// <summary>One packet of the receiver's microphone (binary kind 3, header stripped), on the network thread.</summary>
+    public event Action<ReadOnlyMemory<byte>>? MicPacketReceived;
+
+    private void OnBinary(byte[] packet)
+    {
+        if (packet.Length > VideoPacket.HeaderSize && packet[0] == VideoPacket.KindMic)
+            MicPacketReceived?.Invoke(packet.AsMemory(VideoPacket.HeaderSize));
+    }
+
     /// <summary>Raised on a network thread when the receiver asks to change settings.</summary>
     public event Action<ConfigureMessage>? ConfigureRequested;
 
@@ -322,7 +336,7 @@ public sealed class SenderSession : IAsyncDisposable
         {
             while (!token.IsCancellationRequested)
             {
-                var text = await ReceiveTextAsync(_socket, token);
+                var text = await ReceiveTextAsync(_socket, token, OnBinary);
                 if (text is null)
                 {
                     _ = CloseAsync("Il ricevitore ha chiuso la connessione.", null);
@@ -364,6 +378,12 @@ public sealed class SenderSession : IAsyncDisposable
                         break;
                     case ConfigureMessage configure:
                         ConfigureRequested?.Invoke(configure);
+                        break;
+                    case MicStartMessage micStart:
+                        MicStarted?.Invoke(micStart);
+                        break;
+                    case MicStopMessage:
+                        MicStopped?.Invoke();
                         break;
                     case ByeMessage bye:
                         _ = CloseAsync(bye.Reason == ByeReasons.Replaced
@@ -471,7 +491,8 @@ public sealed class SenderSession : IAsyncDisposable
         socket.SendAsync(Encoding.UTF8.GetBytes(text), WebSocketMessageType.Text, true, token);
 
     /// <summary>The next text message; binary messages are skipped (receivers send none in v1). Null when the socket closes.</summary>
-    private static async Task<string?> ReceiveTextAsync(ClientWebSocket socket, CancellationToken token)
+    /// <summary>The next text message; binary ones go to <paramref name="onBinary"/> (the receiver's microphone), or are skipped. Null when the socket closes.</summary>
+    private static async Task<string?> ReceiveTextAsync(ClientWebSocket socket, CancellationToken token, Action<byte[]>? onBinary = null)
     {
         var buffer = new byte[16 * 1024];
         using var message = new MemoryStream();
@@ -487,6 +508,7 @@ public sealed class SenderSession : IAsyncDisposable
                 continue;
             if (result.MessageType == WebSocketMessageType.Text)
                 return Encoding.UTF8.GetString(message.GetBuffer(), 0, (int)message.Length);
+            onBinary?.Invoke(message.ToArray());
             message.SetLength(0);
         }
     }

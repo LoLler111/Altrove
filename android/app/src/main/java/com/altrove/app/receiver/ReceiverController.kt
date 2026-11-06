@@ -11,6 +11,7 @@ import com.altrove.app.BuildConfig
 import com.altrove.app.protocol.AltroveProtocol
 import com.altrove.app.protocol.AudioStart
 import com.altrove.app.protocol.AudioStop
+import com.altrove.app.protocol.MicStop
 import com.altrove.app.protocol.Bye
 import com.altrove.app.protocol.Configure
 import com.altrove.app.protocol.Features
@@ -150,6 +151,7 @@ class ReceiverController(private val context: Context) : ReceiverServer.Listener
 
     fun stop() {
         releaseAudio()
+        releaseMic(tellSender = true)
         advertiser.stop()
         statsJob?.cancel()
         server?.let {
@@ -260,6 +262,7 @@ class ReceiverController(private val context: Context) : ReceiverServer.Listener
                 _settings.value = message
                 applyingJob?.cancel()
                 _applying.value = false
+                updateMic()
             }
             is Bye -> connection.close()
             else -> Unit
@@ -279,6 +282,47 @@ class ReceiverController(private val context: Context) : ReceiverServer.Listener
         player = null
     }
 
+    // ---- This device's microphone, while the PC uses it as "Microfono Altrove" ----
+
+    private var mic: MicCapture? = null
+    private val _micPermissionNeeded = MutableStateFlow(false)
+
+    /** The PC turned the microphone on and Android has not granted RECORD_AUDIO yet: the activity asks. */
+    val micPermissionNeeded: StateFlow<Boolean> = _micPermissionNeeded
+
+    private fun hasMicPermission() =
+        context.checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) == android.content.pm.PackageManager.PERMISSION_GRANTED
+
+    /** Records exactly while the PC's settings say the microphone is on. */
+    private fun updateMic() = synchronized(lock) {
+        val wanted = _settings.value?.mic == true
+        if (wanted && mic == null) {
+            if (!hasMicPermission()) {
+                _micPermissionNeeded.value = true
+                return
+            }
+            val capture = runCatching { MicCapture { packet -> server?.sendBinary(packet) } }
+                .onFailure { Log.w("AltroveMic", "No microphone", it) }.getOrNull() ?: return
+            server?.send(capture.format)
+            capture.start()
+            mic = capture
+        } else if (!wanted && mic != null) {
+            releaseMic(tellSender = true)
+        }
+    }
+
+    private fun releaseMic(tellSender: Boolean) = synchronized(lock) {
+        mic?.release()
+        if (mic != null && tellSender) server?.send(MicStop)
+        mic = null
+    }
+
+    /** The answer to the permission request: start, or tell the PC the microphone stays off. */
+    fun onMicPermission(granted: Boolean) {
+        _micPermissionNeeded.value = false
+        if (granted) updateMic() else configure(Configure(mic = false))
+    }
+
     override fun onVideo(connection: WebSocket, packet: VideoPacket) {
         receivedBytes.addAndGet(packet.length.toLong())
         synchronized(lock) { decoder }?.submit(packet)
@@ -286,6 +330,7 @@ class ReceiverController(private val context: Context) : ReceiverServer.Listener
 
     override fun onSenderDisconnected(connection: WebSocket) {
         releaseAudio()
+        releaseMic(tellSender = false)
         statsJob?.cancel()
         applyingJob?.cancel()
         _applying.value = false

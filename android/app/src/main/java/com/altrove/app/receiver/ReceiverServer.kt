@@ -43,6 +43,12 @@ class ReceiverServer(
         if (connection.isOpen) connection.send(Messages.encode(message))
     }
 
+    /** A binary message to the sender (the microphone). */
+    fun sendBinary(data: ByteArray) {
+        val connection = active ?: return
+        if (connection.isOpen) connection.send(data)
+    }
+
     /** Says goodbye to the sender and closes its connection; the server keeps listening. */
     fun disconnect() {
         val connection = active ?: return

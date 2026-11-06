@@ -16,7 +16,8 @@ locale a un'app ricevitore. Non serve Miracast e funziona anche con un PC colleg
 | Schermo virtuale ed estensione (fase 2) | provato sul PC fisso; manca la prova con il tablet |
 | Dal tablet: tocco, trackpad, pannello con risoluzioni e scala (fase 5) | tocco provato sul tablet; trackpad e menu delle risoluzioni nell'emulatore; scala da provare sul fisso |
 | Audio del PC sul ricevitore (fase 5) | provato nella VM e nell'emulatore; manca la prova con il tablet |
-| Microfono del tablet e fotocamera come webcam (fase 5) | da fare |
+| Microfono del tablet come «Microfono Altrove» in Windows (fase 5) | provato nella VM e nell'emulatore; manca l'ascolto da un'app sul fisso |
+| Fotocamera del telefono come webcam (fase 5) | da fare |
 | Ricevitore web per Chromecast e TV LG webOS (fase 3) | da fare |
 | App Android come trasmettitore (fase 4) | da fare |
 
@@ -103,6 +104,13 @@ Con «Usa il PC dal ricevitore (tocco e trackpad)» attivo sul PC, nel pannello 
 Funziona in Duplica e in Estendi, anche su PC senza schermo touch. Windows non lascia toccare le finestre aperte come
 amministratore né le richieste di permesso (UAC).
 
+**Microfono**: con «Usa il microfono del ricevitore» la voce del tablet diventa **«Microfono Altrove»** in Windows: in Teams,
+Discord o Zoom lo scegli come un microfono qualsiasi. Altrove lo presenta come microfono USB grazie a
+[usbip-win2](https://github.com/vadimgrn/usbip-win2) (open source, driver firmati da Microsoft), che la prima volta scarica
+e installa con un permesso di amministratore; nessun programma esterno da configurare. Sul tablet si accende e si spegne
+dal pannello (Android chiede il permesso del microfono la prima volta) e usa la cancellazione dell'eco. Il codice del
+microfono USB è adattato da [celmic](https://github.com/blackfoxsoftware/celmic) (MIT): vedi `third_party/celmic/NOTICE.md`.
+
 **Audio**: con «Manda l'audio del PC al ricevitore» quello che il PC sta suonando (tutto il suono di Windows) si sente
 anche sul tablet, compresso in Opus (~128 kbit/s); il volume è quello del tablet. Si accende e si spegne anche dal
 pannello. Il PC continua a suonare anche dalle sue casse.
@@ -136,6 +144,8 @@ La prima volta Windows può chiedere di permettere ad Altrove l'accesso alla ret
 | `altrove-cli touch 0.5,0.5 [--seconds 2]` | Un tocco (o una pressione lunga) come lo manderebbe il ricevitore, a x,y da 0 a 1 sullo schermo `--monitor N` |
 | `altrove-cli scale [150] [--monitor N]` | Legge (o imposta) la scala di Windows di uno schermo |
 | `altrove-cli audio [pcm] --seconds 5` | Registra quello che suona il PC come lo riceverebbe il tablet, lo ridecodifica e salva `altrove-audio.wav` |
+| `altrove-cli mic-selftest` | Fa la parte di usbip-win2 contro il microfono USB di Altrove e controlla che il suono esca con i tempi giusti (non serve installare niente) |
+| `altrove-cli mic-tone --seconds 30` | Collega davvero «Microfono Altrove» con un tono a 440 Hz, da registrare con un'app qualsiasi |
 | `altrove-cli stress capture\|convert\|encode --seconds 60` | Un pezzo della catena da solo per un minuto, per cercare perdite e crash |
 
 ### Schermo virtuale (Estendi)

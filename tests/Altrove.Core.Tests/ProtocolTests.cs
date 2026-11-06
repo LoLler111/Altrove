@@ -210,4 +210,13 @@ public class ProtocolTests
         Assert.Equal(new byte[] { 2, 0, 0, 0, 0, 0, 0, 0, 1, 0, 9, 8 }, VideoPacket.EncodeAudio([9, 8], 256));
         Assert.False(VideoPacket.TryDecode(VideoPacket.EncodeAudio([9, 8], 256), out _, out _, out _)); // not video
     }
+
+    [Fact]
+    public void Microphone_messages_match_the_android_side()
+    {
+        Assert.Equal(new MicStartMessage("opus", 48000, 1, 20),
+            ControlMessage.Parse("{\"type\":\"micStart\",\"codec\":\"opus\",\"sampleRate\":48000,\"channels\":1,\"frameMs\":20}"));
+        Assert.IsType<MicStopMessage>(ControlMessage.Parse("{\"type\":\"micStop\"}"));
+        Assert.True(Assert.IsType<ConfigureMessage>(ControlMessage.Parse("{\"type\":\"configure\",\"mic\":true}")).Mic);
+    }
 }

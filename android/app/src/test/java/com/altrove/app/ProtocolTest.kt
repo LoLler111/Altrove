@@ -10,6 +10,8 @@ import com.altrove.app.protocol.H264
 import com.altrove.app.protocol.Hello
 import com.altrove.app.protocol.Keyframe
 import com.altrove.app.protocol.Messages
+import com.altrove.app.protocol.MicStart
+import com.altrove.app.protocol.MicStop
 import com.altrove.app.protocol.Mouse
 import com.altrove.app.protocol.ResolutionChoice
 import com.altrove.app.protocol.Ping
@@ -156,5 +158,13 @@ class ProtocolTest {
         val head = com.altrove.app.receiver.AudioPlayer.opusHead(2, 48000)
         val bytes = ByteArray(head.remaining()).also { head.get(it) }
         assertArrayEquals(byteArrayOf(0x4F, 0x70, 0x75, 0x73, 0x48, 0x65, 0x61, 0x64, 1, 2, 0, 0, 0x80.toByte(), 0xBB.toByte(), 0, 0, 0, 0, 0), bytes)
+    }
+
+    @Test
+    fun microphone_messages_match_the_windows_side() {
+        assertEquals("""{"type":"micStart","codec":"opus","sampleRate":48000,"channels":1,"frameMs":20}""", Messages.encode(MicStart("opus", 48000, 1, 20)))
+        assertEquals("""{"type":"micStop"}""", Messages.encode(MicStop))
+        assertEquals("""{"type":"configure","mic":true}""", Messages.encode(Configure(mic = true)))
+        assertArrayEquals(byteArrayOf(3, 0, 0, 0, 0, 0, 0, 0, 1, 0, 9, 8), com.altrove.app.receiver.MicCapture.packet(byteArrayOf(9, 8), 0, 2, 256))
     }
 }

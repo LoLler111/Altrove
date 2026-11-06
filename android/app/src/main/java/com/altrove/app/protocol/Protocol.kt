@@ -85,6 +85,9 @@ object Features {
 
     /** The sender streams the PC's sound and accepts configure.audio. */
     const val AUDIO = "audio"
+
+    /** The sender takes this device's microphone and makes it a Windows microphone. */
+    const val MIC = "mic"
 }
 
 object TouchStates {
@@ -132,6 +135,7 @@ data class StreamSettings(
     val scale: Int? = null,
     val audio: Boolean? = null,
     val touch: Boolean? = null,
+    val mic: Boolean? = null,
 ) : ControlMessage()
 
 /** A request to change some settings; null fields stay as they are. */
@@ -145,6 +149,7 @@ data class Configure(
     val bitrateKbps: Int? = null,
     val scale: Int? = null,
     val audio: Boolean? = null,
+    val mic: Boolean? = null,
 ) : ControlMessage()
 
 /** One finger, at a position on the streamed image from 0 to 1. */
@@ -170,6 +175,15 @@ data class AudioStart(val codec: String, val sampleRate: Int, val channels: Int,
 @SerialName("audioStop")
 data object AudioStop : ControlMessage()
 
+/** This device's microphone: binary packets of kind 3 in this format follow, until [MicStop]. */
+@Serializable
+@SerialName("micStart")
+data class MicStart(val codec: String, val sampleRate: Int, val channels: Int, val frameMs: Int) : ControlMessage()
+
+@Serializable
+@SerialName("micStop")
+data object MicStop : ControlMessage()
+
 object MouseActions {
     const val MOVE = "move"
     const val DOWN = "down"
@@ -189,7 +203,7 @@ object MouseButtons {
 data class Mouse(val action: String, val dx: Double? = null, val dy: Double? = null, val button: String? = null) : ControlMessage()
 
 object Messages {
-    private val known = setOf("hello", "start", "stop", "keyframe", "ping", "pong", "stats", "bye", "settings", "configure", "touch", "mouse", "audioStart", "audioStop")
+    private val known = setOf("hello", "start", "stop", "keyframe", "ping", "pong", "stats", "bye", "settings", "configure", "touch", "mouse", "audioStart", "audioStop", "micStart", "micStop")
 
     val json = Json {
         classDiscriminator = "type"
@@ -218,6 +232,7 @@ class VideoPacket(val flags: Int, val presentationMicros: Long, val data: ByteAr
     companion object {
         const val KIND_VIDEO = 1
         const val KIND_AUDIO = 2
+        const val KIND_MIC = 3
         const val HEADER_SIZE = 10
         const val FLAG_KEYFRAME = 1
         const val FLAG_PARAMETER_SETS = 2

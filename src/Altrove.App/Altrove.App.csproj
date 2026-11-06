@@ -10,7 +10,14 @@
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <!-- Program.Main runs Velopack's install/update hooks before WPF starts. -->
     <StartupObject>Altrove.App.Program</StartupObject>
+    <!-- The same drawing as the Android launcher icon: tools/icon/make-icon.ps1 makes it. -->
+    <ApplicationIcon>Assets\Altrove.ico</ApplicationIcon>
   </PropertyGroup>
+
+  <ItemGroup>
+    <Resource Include="Assets\Altrove.ico" />
+    <Resource Include="Assets\Altrove-64.png" />
+  </ItemGroup>
 
   <ItemGroup>
     <PackageReference Include="CommunityToolkit.Mvvm" Version="8.4.0" />

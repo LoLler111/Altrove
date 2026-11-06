@@ -27,6 +27,10 @@ Testi per l'utente in italiano, commenti e nomi nel codice in inglese (come in S
 - Audio: `Capture/Audio/LoopbackAudio` (WASAPI loopback con NAudio, Opus a 10 ms con Concentus, oppure PCM) →
   `SenderSession.SendAudio` (coda propria, prima del video) → pacchetti binari tipo 2 → `receiver/AudioPlayer.kt`
   (decoder Opus di Android, AudioTrack a bassa latenza, scarta oltre 150 ms). `altrove-cli audio` lo prova senza tablet.
+- Microfono: `receiver/MicCapture.kt` (VOICE_COMMUNICATION, Opus di Android o PCM, pacchetti tipo 3) → `SenderSession.MicPacketReceived`
+  → `Capture/Microphone/MicBridge` → `Core/UsbMic` (jitter buffer, microfono USB Audio 2.0) → `UsbIpMicServer` su 127.0.0.1:47809
+  → usbip-win2 → usbaudio2.sys di Windows. Adattato da celmic (MIT). `UsbIpSetup` fissa la release 0.9.8.1 e la sua SHA-256.
+  Nella VM in Desktop remoto il microfono si collega e Windows lo riconosce, ma le app vedono solo «Audio remoto».
 
 ## Rilasci e aggiornamenti
 - Repository pubblico `LoLler111/Altrove`; un tag `vX.Y.Z` uguale a `version.txt` fa partire `.github/workflows/release.yml`

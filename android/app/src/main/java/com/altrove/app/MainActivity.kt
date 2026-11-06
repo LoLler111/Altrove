@@ -1,11 +1,13 @@
 package com.altrove.app
 
 import android.os.Build
+import android.Manifest
 import android.os.Bundle
 import android.util.DisplayMetrics
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.enableEdgeToEdge
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
@@ -24,6 +26,11 @@ class MainActivity : ComponentActivity() {
     private lateinit var receiver: ReceiverController
     private lateinit var updates: UpdateController
 
+    // Asked when the PC turns "Microfono Altrove" on and Android has not allowed the microphone yet.
+    private val micPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        receiver.onMicPermission(granted)
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
@@ -35,6 +42,11 @@ class MainActivity : ComponentActivity() {
             }
         }
         // While a picture is on screen: no sleeping, no system bars over it.
+        lifecycleScope.launch {
+            receiver.micPermissionNeeded.collect { needed ->
+                if (needed) micPermission.launch(Manifest.permission.RECORD_AUDIO)
+            }
+        }
         lifecycleScope.launch {
             receiver.state.collect { state ->
                 val streaming = state is ReceiverState.Streaming

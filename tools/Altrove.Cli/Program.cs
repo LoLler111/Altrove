@@ -40,6 +40,8 @@ try
         "touch" => await Touch(options, args.Contains("--seconds")),
         "scale" => Scale(options),
         "audio" => await AudioTest(options),
+        "mic-selftest" => MicSelfTest(),
+        "mic-tone" => await MicTone(options),
         "stress" => await Stress(options),
         _ => Usage(),
     };
@@ -212,6 +214,56 @@ static async Task<int> AudioTest(Options options)
     }
     Console.WriteLine($"Salvato {Path.GetFullPath("altrove-audio.wav")}");
     return 0;
+}
+
+static int MicSelfTest()
+{
+    // Plays usbip-win2's part against Altrove's USB/IP microphone: enumerate, start streaming, read 50 capture URBs
+    // of 10 ms, and check that a 440 Hz tone comes out on time. Needs nothing installed.
+    using UsbIpMicServerHarness harness = new();
+    return harness.Run();
+}
+
+static async Task<int> MicTone(Options options)
+{
+    // "Microfono Altrove" for real, with a 440 Hz tone instead of the tablet: attaches it through usbip-win2 and
+    // lists Windows' microphones. Record from it with any app during --seconds.
+    if (!Altrove.Capture.Microphone.UsbIpSetup.IsInstalled)
+    {
+        Console.WriteLine("usbip-win2 non è installato.");
+        return 1;
+    }
+    using var bridge = new Altrove.Capture.Microphone.MicBridge();
+    bridge.Begin(new MicStartMessage(Altrove.Core.Protocol.AudioCodecs.Pcm, 48_000, 1, 10));
+    using var stop = new CancellationTokenSource(TimeSpan.FromSeconds(options.Seconds));
+    var clock = Stopwatch.StartNew();
+    var block = new byte[960];
+    var n = 0;
+    var shown = false;
+    for (var i = 0; !stop.IsCancellationRequested; i++)
+    {
+        for (var k = 0; k < 480; k++, n++)
+        {
+            var s = (short)(0.3 * 32767 * Math.Sin(2 * Math.PI * 440 * n / 48_000.0));
+            block[k * 2] = (byte)s;
+            block[k * 2 + 1] = (byte)(s >> 8);
+        }
+        bridge.Push(block);
+        if (!shown && bridge.Attached && clock.Elapsed > TimeSpan.FromSeconds(3))
+        {
+            shown = true;
+            Console.WriteLine("Collegato a Windows. Microfoni presenti:");
+            using var devices = new NAudio.CoreAudioApi.MMDeviceEnumerator();
+            foreach (var d in devices.EnumerateAudioEndPoints(NAudio.CoreAudioApi.DataFlow.Capture, NAudio.CoreAudioApi.DeviceState.Active))
+                Console.WriteLine($"  {d.FriendlyName}");
+        }
+        var wait = TimeSpan.FromMilliseconds(10 * (i + 1)) - clock.Elapsed;
+        if (wait > TimeSpan.Zero)
+            await Task.Delay(wait);
+        if (i % 500 == 0)
+            Console.WriteLine($"  {clock.Elapsed.TotalSeconds:0} s: collegato {bridge.Attached}, un'app registra {bridge.Recording}{(bridge.AttachError is { } e ? " · " + e : "")}");
+    }
+    return bridge.Attached ? 0 : 1;
 }
 
 static int List()

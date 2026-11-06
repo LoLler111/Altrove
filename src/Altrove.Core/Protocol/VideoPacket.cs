@@ -17,6 +17,7 @@ public static class VideoPacket
 {
     public const byte KindVideo = 1;
     public const byte KindAudio = 2;
+    public const byte KindMic = 3;
     public const int HeaderSize = 10;
 
     public static byte[] Encode(ReadOnlySpan<byte> accessUnit, long presentationMicros, VideoPacketFlags flags)

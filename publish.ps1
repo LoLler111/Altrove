@@ -50,6 +50,6 @@ if ($DownloadPrevious) {
     if ($LASTEXITCODE -ne 0) { Write-Warning 'Nessuna release precedente scaricata: niente pacchetto delta.' }
 }
 vpk pack --packId Altrove --packVersion $version --packDir $out --mainExe Altrove.exe --runtime win-x64 `
-    --packTitle Altrove --packAuthors LoLler111 --outputDir $releases
+    --packTitle Altrove --packAuthors LoLler111 --icon (Join-Path $root 'src\Altrove.App\Assets\Altrove.ico') --outputDir $releases
 if ($LASTEXITCODE -ne 0) { throw 'vpk pack failed.' }
 Write-Host "Release $version`: $releases"

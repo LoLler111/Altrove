@@ -134,6 +134,16 @@ fun SettingsPanel(
                 receiver.configure(Configure(bitrateKbps = it))
             }
             Note("Se l'immagine scatta lontano dal router, prova 30 fps o una qualità più bassa.")
+            if (Features.MIC in features) {
+                Section("MICROFONO DEL TABLET")
+                val mic = current.mic
+                if (mic != null) {
+                    Chips(listOf(true, false), mic, enabled, { if (it) "Acceso" else "Spento" }) { receiver.configure(Configure(mic = it)) }
+                    Note("Sul PC diventa «Microfono Altrove»: sceglilo come microfono in Teams, Discord, Zoom.")
+                } else {
+                    Note("Si attiva una volta da Altrove sul PC: «Usa il microfono del ricevitore».")
+                }
+            }
             current.audio?.let { on ->
                 Section("AUDIO DEL PC")
                 Chips(listOf(true, false), on, enabled, { if (it) "Acceso" else "Spento" }) { receiver.configure(Configure(audio = it)) }

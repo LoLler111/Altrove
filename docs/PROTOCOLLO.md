@@ -69,6 +69,7 @@ Nel proprio `hello` ciascun lato può elencare le funzioni facoltative che gesti
 | `mouse` | trasmettitore | accetta i messaggi `mouse`: il ricevitore fa da trackpad (dalla 0.3) |
 | `scale` | trasmettitore | in `extend` il ricevitore può scegliere la scala (DPI) dello schermo virtuale (dalla 0.3) |
 | `audio` | trasmettitore | manda l'audio del PC (se il ricevitore ha `audioCodecs`) e accetta `configure` con `audio` (dalla 0.4) |
+| `mic` | trasmettitore | accetta la voce del microfono del ricevitore e la presenta a Windows come «Microfono Altrove» (dalla 0.4) |
 
 Un messaggio facoltativo si manda solo se l'altro lato ha annunciato la funzione. Chi non manda
 `features` (le versioni 0.1) non ne gestisce nessuna. Le funzioni nuove non cambiano `protocol`.
@@ -190,6 +191,19 @@ In `settings` il campo `audio` dice se l'audio è acceso; il ricevitore lo cambi
 { "type": "configure", "audio": false }
 ```
 
+### `micStart` / `micStop` — ricevitore → trasmettitore (funzione `mic`, dalla 0.4)
+```json
+{ "type": "micStart", "codec": "opus", "sampleRate": 48000, "channels": 1, "frameMs": 20 }
+{ "type": "micStop" }
+```
+La voce del microfono del ricevitore verso il PC. Dopo `micStart` arrivano pacchetti binari di tipo `3` in quel
+formato (Opus, oppure `pcm` a 16 bit little-endian), fino a `micStop`.
+
+Chi decide è il trasmettitore: in `settings` il campo `mic` vale `null` se il PC non può usare la voce (manca il
+componente per il microfono), `false` se è spento, `true` se è acceso. Il ricevitore lo chiede con `configure` e
+`mic`, e registra solo finché `settings.mic` è `true`. Sul PC la voce diventa il «Microfono Altrove», un microfono
+USB che le app vedono come gli altri (USB/IP in locale con usbip-win2, vedi README).
+
 ### `bye` — entrambi
 ```json
 { "type": "bye", "reason": "user" }
@@ -202,7 +216,7 @@ Un messaggio WebSocket binario = un fotogramma compresso o un pezzo di audio:
 
 | Byte | Contenuto |
 |---|---|
-| 0 | tipo: `1` = video, `2` = audio (dalla 0.4) |
+| 0 | tipo: `1` = video, `2` = audio del PC, `3` = voce del ricevitore (dalla 0.4) |
 | 1 | flag (video): bit 0 = fotogramma chiave (IDR), bit 1 = contiene SPS/PPS; audio: 0 |
 | 2–9 | istante di presentazione in microsecondi, intero a 64 bit big-endian |
 | 10… | video: il fotogramma H.264 in formato Annex B (NAL separati da `00 00 00 01`); audio: un pacchetto Opus o un blocco PCM |

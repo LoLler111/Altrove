@@ -6,6 +6,8 @@
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
     <!-- In-app update: Android still asks the user before installing. -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+    <!-- The microphone, only while the PC uses it as "Microfono Altrove". -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
 
     <!-- The same APK runs on phones, tablets and TVs (Fire TV, Google TV): neither touch nor a remote is required. -->
     <uses-feature android:name="android.hardware.touchscreen" android:required="false" />

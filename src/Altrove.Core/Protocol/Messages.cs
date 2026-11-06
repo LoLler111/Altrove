@@ -30,6 +30,8 @@ public sealed record DisplayInfo(int Width, int Height, double RefreshRate);
 [JsonDerivedType(typeof(MouseMessage), "mouse")]
 [JsonDerivedType(typeof(AudioStartMessage), "audioStart")]
 [JsonDerivedType(typeof(AudioStopMessage), "audioStop")]
+[JsonDerivedType(typeof(MicStartMessage), "micStart")]
+[JsonDerivedType(typeof(MicStopMessage), "micStop")]
 public abstract record ControlMessage
 {
     private static readonly JsonSerializerOptions Options = new(JsonSerializerDefaults.Web)
@@ -56,7 +58,7 @@ public abstract record ControlMessage
     }
 
     private static readonly HashSet<string> KnownTypes =
-        ["hello", "start", "stop", "keyframe", "ping", "pong", "stats", "bye", "settings", "configure", "touch", "mouse", "audioStart", "audioStop"];
+        ["hello", "start", "stop", "keyframe", "ping", "pong", "stats", "bye", "settings", "configure", "touch", "mouse", "audioStart", "audioStop", "micStart", "micStop"];
 }
 
 public static class Roles
@@ -88,6 +90,9 @@ public static class Features
 
     /// <summary>The sender streams the PC's sound (to receivers with audioCodecs) and accepts configure.audio.</summary>
     public const string Audio = "audio";
+
+    /// <summary>The sender takes the receiver's microphone and makes it a Windows microphone.</summary>
+    public const string Mic = "mic";
 }
 
 public static class TouchStates
@@ -178,7 +183,8 @@ public sealed record SettingsMessage(
     string? Notice = null,
     int? Scale = null,
     bool? Audio = null,
-    bool? Touch = null) : ControlMessage;
+    bool? Touch = null,
+    bool? Mic = null) : ControlMessage;
 
 /// <summary>A receiver's request to change some settings; null fields stay as they are.</summary>
 public sealed record ConfigureMessage(
@@ -188,7 +194,8 @@ public sealed record ConfigureMessage(
     int? Fps = null,
     int? BitrateKbps = null,
     int? Scale = null,
-    bool? Audio = null) : ControlMessage;
+    bool? Audio = null,
+    bool? Mic = null) : ControlMessage;
 
 /// <summary>One finger on the receiver's screen, at a position on the streamed image from 0 to 1.</summary>
 public sealed record TouchPointer(int Id, double X, double Y, string State);
@@ -209,3 +216,8 @@ public static class AudioCodecs
 public sealed record AudioStartMessage(string Codec, int SampleRate, int Channels, int FrameMs) : ControlMessage;
 
 public sealed record AudioStopMessage : ControlMessage;
+
+/// <summary>The receiver's microphone: binary packets of kind 3 in this format follow, until micStop.</summary>
+public sealed record MicStartMessage(string Codec, int SampleRate, int Channels, int FrameMs) : ControlMessage;
+
+public sealed record MicStopMessage : ControlMessage;

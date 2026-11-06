@@ -3,6 +3,7 @@ using System.Windows;
 using Altrove.Capture;
 using Altrove.Capture.Audio;
 using Altrove.Capture.Input;
+using Altrove.Capture.Microphone;
 using Altrove.Capture.VirtualDisplay;
 using Altrove.Core.Discovery;
 using Altrove.Core.Protocol;
@@ -87,6 +88,7 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
         _softwareEncoder = _settings.SoftwareEncoder;
         _allowTouch = _settings.AllowTouch;
         _sendAudio = _settings.SendAudio;
+        _useTabletMic = _settings.UseTabletMic;
         SelectedReceiver = Receivers.FirstOrDefault(r => r.Id == _settings.LastReceiverId);
 
         // While streaming, a choice made on the PC applies at once, like one from the receiver's panel.
@@ -308,6 +310,88 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
 
     private LoopbackAudio? _audio;
 
+    // ---- The receiver's microphone as "Microfono Altrove" ----
+
+    /// <summary>The tablet's microphone becomes a Windows microphone (needs usbip-win2, installed once).</summary>
+    [ObservableProperty]
+    private bool _useTabletMic;
+
+    private MicBridge? _mic;
+
+    partial void OnUseTabletMicChanged(bool value)
+    {
+        _settings.UseTabletMic = value;
+        _settings.Save();
+        if (value && !UsbIpSetup.IsInstalled)
+        {
+            _ = InstallMicAsync();
+            return;
+        }
+        ApplyMic();
+        if (_session is { } session && State == SessionState.Streaming)
+            session.SendSettings(CurrentSettings(null));
+    }
+
+    /// <summary>The bridge runs while streaming with the box ticked and usbip-win2 installed.</summary>
+    private void ApplyMic()
+    {
+        var wanted = UseTabletMic && UsbIpSetup.IsInstalled && _session is not null;
+        if (wanted && _mic is null)
+        {
+            try
+            {
+                _mic = new MicBridge();
+                App.Log("Microfono Altrove acceso.");
+            }
+            catch (System.Net.Sockets.SocketException ex)
+            {
+                App.Log($"Microfono Altrove non avviato: {ex.Message}");
+            }
+        }
+        else if (!wanted && _mic is not null)
+        {
+            App.Log($"Microfono Altrove spento: ricevuti {_mic.PacketsReceived} pacchetti di voce, {_mic.SecondsDecoded:0.0} s decodificati.");
+            _mic.Dispose();
+            _mic = null;
+        }
+    }
+
+    /// <summary>The first time: explain, download the pinned usbip-win2 and install it (Windows asks for permission).</summary>
+    private async Task InstallMicAsync()
+    {
+        var answer = MessageBox.Show(
+            "Per usare il microfono del tablet nelle app del PC (Teams, Discord, Zoom…) Altrove crea un «Microfono Altrove». " +
+            "Gli serve usbip-win2, un componente open source con driver firmati da Microsoft (circa 26 MB, da GitHub).\n\n" +
+            "Windows chiederà il permesso di amministratore. Procedo?",
+            "Altrove – microfono", MessageBoxButton.YesNo, MessageBoxImage.Question);
+        if (answer != MessageBoxResult.Yes)
+        {
+            UseTabletMic = false;
+            return;
+        }
+        var previous = Status;
+        try
+        {
+            Status = "Scarico usbip-win2…";
+            var installer = await UsbIpSetup.DownloadInstallerAsync(CancellationToken.None);
+            Status = "Installo usbip-win2…";
+            var restart = await UsbIpSetup.InstallAsync(installer);
+            Status = previous;
+            if (restart)
+                MessageBox.Show("usbip-win2 è installato. Riavvia Windows prima di usare il microfono.", "Altrove – microfono");
+            ApplyMic();
+            if (_session is { } session && State == SessionState.Streaming)
+                session.SendSettings(CurrentSettings(null));
+        }
+        catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException or System.Net.Http.HttpRequestException or TaskCanceledException or System.IO.IOException)
+        {
+            UseTabletMic = false;
+            ShowError(ex is System.ComponentModel.Win32Exception
+                ? "Installazione annullata: senza il permesso di Windows il microfono del tablet non è disponibile."
+                : $"Il microfono del tablet non è disponibile: {ex.Message}");
+        }
+    }
+
     /// <summary>The format this receiver plays best, or null if it plays none (older receivers).</summary>
     private static string? AudioCodecFor(SenderSession? session) =>
         session is null ? null
@@ -475,7 +559,7 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
         _connecting = new CancellationTokenSource();
         try
         {
-            List<string> features = [Features.Configure, Features.Scale, Features.Audio];
+            List<string> features = [Features.Configure, Features.Scale, Features.Audio, Features.Mic];
             // Always offered: the PC's check box can turn them on and off during the stream.
             features.AddRange([Features.Touch, Features.Mouse]);
             var self = new HelloMessage(AltroveProtocol.Version, Roles.Sender, _settings.DeviceId, Environment.MachineName,
@@ -501,11 +585,14 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
             }
 
             await StartStreamAsync(session, _connecting.Token);
+            // The receiver's microphone goes to "Microfono Altrove" whenever a bridge is running.
+            session.MicStarted += format => _mic?.Begin(format);
+            session.MicStopped += () => _mic?.End();
+            session.MicPacketReceived += packet => _mic?.Push(packet);
             if (SendAudio)
-            {
                 StartAudio(session);
-                session.SendSettings(CurrentSettings(null)); // the first settings went out before the sound was on
-            }
+            ApplyMic();
+            session.SendSettings(CurrentSettings(null)); // the first settings went out before sound and microphone were on
             State = SessionState.Streaming;
         }
         catch (OperationCanceledException) when (_connecting?.IsCancellationRequested == true)
@@ -686,7 +773,8 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
             notice,
             scale,
             AudioCodecFor(_session) is null ? null : _audio is not null,
-            AllowTouch);
+            AllowTouch,
+            UsbIpSetup.IsInstalled ? _mic is not null : null);
     }
 
     /// <summary>The receiver asked for other settings: apply them to the running stream, or put the old ones back.</summary>
@@ -739,6 +827,8 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
             // Sound on or off changes nothing else.
             if (request.Audio is { } wantAudio)
                 SendAudio = wantAudio; // OnSendAudioChanged turns it on or off
+            if (request.Mic is { } wantMic && (UsbIpSetup.IsInstalled || !wantMic))
+                UseTabletMic = wantMic; // OnUseTabletMicChanged too
 
             if (after == before)
             {
@@ -818,6 +908,10 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
         _touch?.Dispose();
         _touch = null;
         _mouse = null;
+        if (_mic is not null)
+            App.Log($"Microfono Altrove spento: ricevuti {_mic.PacketsReceived} pacchetti di voce, {_mic.SecondsDecoded:0.0} s decodificati.");
+        _mic?.Dispose();
+        _mic = null;
         _applied = null;
         _audio?.Dispose();
         _audio = null;
