@@ -16,8 +16,11 @@ Testi per l'utente in italiano, commenti e nomi nel codice in inglese (come in S
 - Prima scelta sempre l'encoder hardware della GPU che pilota lo schermo; `ParameterSetCache` garantisce SPS/PPS davanti a ogni IDR.
 - Ripiego: se encoder o conversione GPU falliscono in trasmissione, `ScreenVideoSource` ricostruisce la catena senza
   il pezzo rotto (encoder hardware successivo, poi software; conversione CPU), stessa connessione, al massimo 3 volte;
-  i pezzi rotti restano esclusi finché il processo vive. Nato dal Quick Sync di un portatile Intel (E_UNEXPECTED al
-  primo fotogramma). `altrove-cli record|send --simulate-failure N` lo prova anche dove l'encoder funziona.
+  i pezzi rotti restano esclusi finché il processo vive. Conta come rotto anche un encoder che riceve fotogrammi ma
+  per ~2 s non produce nulla. `altrove-cli record|send --simulate-failure N` (o `--simulate-stall N`) lo prova anche
+  dove l'encoder funziona.
+- Encoder asincroni (tutti quelli hardware): `ProcessOutput` una sola volta per ogni `METransformHaveOutput`, anche dopo
+  `MF_E_TRANSFORM_STREAM_CHANGE`; una chiamata in più dà E_UNEXPECTED (Intel Arc lo fa, AMD lo tollerava).
 - L'encoder software scrive nel campione che gli passiamo: `H264Encoder` ne riusa uno solo. Uno nuovo per ogni
   uscita non veniva liberato e mandava il processo fuori memoria in ~30 s (`altrove-cli stress encode` lo verifica).
 - Funzioni facoltative del protocollo (`features` nell'hello): `touch` (`Capture/Input/TouchInjector`, device di

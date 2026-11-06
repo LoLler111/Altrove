@@ -14,6 +14,7 @@ public sealed record VideoRecovery(string Before, string After, Exception Error)
 /// When the encoder or the GPU conversion fails while streaming, the pipeline is rebuilt without the part that
 /// broke (the next hardware encoder, then software; the CPU conversion), and the stream goes on: Intel Quick
 /// Sync fails on the first frame on some laptops (E_UNEXPECTED) where the AMD and software paths work.
+/// An encoder that takes frames but stops producing output for about two seconds counts as broken too.
 /// <see cref="Failed"/> is raised only once nothing is left to try.
 /// </remarks>
 public sealed class ScreenVideoSource : IEncodedVideoSource
@@ -89,6 +90,7 @@ public sealed class ScreenVideoSource : IEncodedVideoSource
 
             // Accept frames a little faster than the target rate so jitter does not halve it.
             _minimumTicks = (long)(Stopwatch.Frequency / (double)settings.Fps * 0.75);
+            _stallFrames = Math.Max(30, settings.Fps * 2);
             _capture = new ScreenCapture(device, _monitor);
             _capture.SetMinimumInterval(TimeSpan.FromSeconds(1.0 / settings.Fps));
             _capture.FrameArrived += OnFrame;
@@ -162,8 +164,13 @@ public sealed class ScreenVideoSource : IEncodedVideoSource
             }
             // Media Foundation counts in 100 ns units.
             encoder.Submit(frame, (long)(now * (10_000_000.0 / Stopwatch.Frequency)));
+            if (encoder.FramesWithoutOutput > _stallFrames)
+                OnFailure(new TimeoutException($"{encoder.Name} non produce più video: {encoder.FramesWithoutOutput} fotogrammi senza uscita."), encoder, null);
         }
     }
+
+    // About two seconds of a changing screen with nothing coming out: the encoder went silent.
+    private int _stallFrames = int.MaxValue;
 
     /// <summary>
     /// A part failed: rebuild without it on another thread (the encoder's own thread is the one calling, and

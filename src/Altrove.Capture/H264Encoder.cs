@@ -85,12 +85,21 @@ public sealed class H264Encoder : IDisposable
     // Test hook (altrove-cli --simulate-failure): the next encoders created fail after a few frames, the way
     // Intel Quick Sync does on some laptops, so the recovery can be tried on a PC whose encoder works.
     private static int _simulatedFailures;
+    private static volatile bool _simulatedStall;
     private const int SimulatedFailureFrame = 30;
     private readonly bool _simulateFailure = TakeSimulatedFailure();
+    private readonly bool _simulateStall = _simulatedStall;
     private int _framesIn;
 
-    /// <summary>Makes the next <paramref name="count"/> encoders fail with E_UNEXPECTED after a few frames.</summary>
-    public static void SimulateFailures(int count) => Volatile.Write(ref _simulatedFailures, count);
+    /// <summary>
+    /// Makes the next <paramref name="count"/> encoders fail with E_UNEXPECTED after a few frames, or, with
+    /// <paramref name="stall"/>, go silent: frames in, nothing out, no error.
+    /// </summary>
+    public static void SimulateFailures(int count, bool stall = false)
+    {
+        _simulatedStall = stall;
+        Volatile.Write(ref _simulatedFailures, count);
+    }
 
     private static bool TakeSimulatedFailure()
     {
@@ -402,9 +411,18 @@ public sealed class H264Encoder : IDisposable
         _thread.Start();
     }
 
+    /// <summary>
+    /// Frames handed over since the encoder last produced output. Grows only while the screen changes, so a
+    /// large number means the encoder went silent without reporting an error.
+    /// </summary>
+    public int FramesWithoutOutput => Volatile.Read(ref _framesWithoutOutput);
+
+    private int _framesWithoutOutput;
+
     /// <summary>Hands the latest converted frame to the encoder; a frame not yet taken is replaced.</summary>
     public void Submit(Nv12Frame frame, long time100ns)
     {
+        Interlocked.Increment(ref _framesWithoutOutput);
         lock (_slotLock)
             _pending = (frame, time100ns);
         if (_frameReady.CurrentCount == 0)
@@ -514,7 +532,11 @@ public sealed class H264Encoder : IDisposable
     private void Encode(Nv12Frame frame, long time)
     {
         if (_simulateFailure && ++_framesIn > SimulatedFailureFrame)
+        {
+            if (_simulateStall)
+                return;
             throw new COMException("Guasto simulato dell'encoder (altrove-cli --simulate-failure)", unchecked((int)0x8000FFFF));
+        }
         if (_keyframeRequested && _codecApi != IntPtr.Zero)
         {
             _keyframeRequested = false;
@@ -638,6 +660,10 @@ public sealed class H264Encoder : IDisposable
                     // The encoder changed its output format (some hardware does this after the first frame).
                     using var type = _transform.GetOutputAvailableType(0, 0);
                     _transform.SetOutputType(0, type, 0);
+                    // An asynchronous encoder takes ProcessOutput only once per METransformHaveOutput and answers
+                    // any other call with E_UNEXPECTED: Intel's does (AMD's let it pass). It signals the frame again.
+                    if (single)
+                        return;
                     continue;
                 }
                 result.CheckError();
@@ -671,6 +697,7 @@ public sealed class H264Encoder : IDisposable
         }
         if (data.Length == 0)
             return;
+        Volatile.Write(ref _framesWithoutOutput, 0);
         var unit = _parameterSets.Complete(data);
         var keyframe = H264.Describe(unit).HasIdr;
         FrameEncoded?.Invoke(new EncodedFrame(unit, sample.SampleTime / 10, keyframe));
