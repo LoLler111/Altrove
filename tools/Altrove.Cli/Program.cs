@@ -32,6 +32,11 @@ try
         "fake-receiver" => await FakeReceiver(options),
         "announce" => await Announce(options),
         "analyze" => Analyze(options),
+        "vdd-install" => VddInstall(args),
+        "vdd-uninstall" => VddUninstall(args),
+        "vdd" => Vdd(options),
+        "extend" => await Extend(options),
+        "vdd-detach" => VddDetach(),
         _ => Usage(),
     };
 }
@@ -64,10 +69,38 @@ static MonitorInfo PickMonitor(Options options)
     return monitors.FirstOrDefault(m => m.Index == options.Monitor) ?? monitors[0];
 }
 
-static async Task<int> Record(Options options)
+// Puts the virtual monitor on the desktop at a receiver's size (default: the Tab A's 1920×1200),
+// records it like "record", then takes it off again.
+static async Task<int> Extend(Options options)
 {
-    var monitor = PickMonitor(options);
+    if (!Altrove.Capture.VirtualDisplay.VirtualMonitor.IsDriverInstalled)
+    {
+        Console.Error.WriteLine("Driver dello schermo virtuale non installato: altrove-cli vdd-install");
+        return 1;
+    }
+    var size = (options.Display ?? "1920x1200").Split('x', '×');
+    var mode = Altrove.Capture.VirtualDisplay.VirtualMonitor.PlanMode(int.Parse(size[0]), int.Parse(size[1]), 3840, 2160, null, options.Fps);
+    Console.WriteLine($"Attacco lo schermo virtuale a {mode.Width}×{mode.Height} @ {mode.RefreshRate} Hz…");
+    var monitor = await Altrove.Capture.VirtualDisplay.VirtualMonitor.AttachAsync(mode, CancellationToken.None);
+    try
+    {
+        Console.WriteLine($"Comparso: {monitor.DisplayName} ({monitor.DeviceName}) a {monitor.Left},{monitor.Top}");
+        // Something must change on it, or capture delivers a single frame: Record asks for keyframes.
+        return await Record(options with { Height = mode.Height }, monitor);
+    }
+    finally
+    {
+        Altrove.Capture.VirtualDisplay.VirtualMonitor.Detach();
+        Console.WriteLine("Schermo virtuale staccato.");
+    }
+}
+
+static async Task<int> Record(Options options, MonitorInfo? chosen = null)
+{
+    var monitor = chosen ?? PickMonitor(options);
     var (width, height) = Altrove.Core.Video.StreamSizing.Fit(monitor.Width, monitor.Height, options.Height * 16 / 9, options.Height);
+    if (chosen is not null)
+        (width, height) = (monitor.Width & ~1, monitor.Height & ~1);
     var settings = new EncoderSettings(width, height, options.Fps, options.Kbps);
     Console.WriteLine($"Registro {monitor.DisplayName} → {width}×{height} @ {options.Fps} fps, {options.Kbps} kbps, {options.Seconds} s");
 
@@ -121,6 +154,62 @@ static async Task<int> Record(Options options)
     Console.WriteLine($"Primo fotogramma decodificato: {snapshot}");
     Console.WriteLine($"Verifica con {verify.Decoder}: decodificati {verify.FramesDecoded}/{verify.FramesIn}, {verify.Width}×{verify.Height}");
     return verify.FramesDecoded > 0 && verify.Width == width ? 0 : 1;
+}
+
+// Virtual display driver: install (asks for administrator rights), remove, or send it a raw command.
+static int VddInstall(string[] args)
+{
+    if (!Altrove.Capture.VirtualDisplay.DriverInstaller.IsAdministrator)
+        return RunElevated(args);
+    var inf = Path.Combine(AppContext.BaseDirectory, "VirtualDisplayDriver", "MttVDD.inf");
+    var settings = Altrove.Capture.VirtualDisplay.VddControl.BuildSettings(1, Altrove.Capture.VirtualDisplay.VddControl.StandardModes);
+    Altrove.Capture.VirtualDisplay.DriverInstaller.Install(inf, settings);
+    Console.WriteLine($"Driver installato; impostazioni in {Altrove.Capture.VirtualDisplay.VddControl.SettingsFile}");
+    return 0;
+}
+
+static int VddUninstall(string[] args)
+{
+    if (!Altrove.Capture.VirtualDisplay.DriverInstaller.IsAdministrator)
+        return RunElevated(args);
+    Altrove.Capture.VirtualDisplay.DriverInstaller.Uninstall();
+    Console.WriteLine("Driver rimosso.");
+    return 0;
+}
+
+// Runs this same command again as administrator, its output going to a log next to the exe.
+static int RunElevated(string[] args)
+{
+    var log = Path.Combine(Path.GetTempPath(), "altrove-elevated.log");
+    var start = new ProcessStartInfo("cmd.exe", $"/c \"\"{Environment.ProcessPath}\" {string.Join(' ', args)} > \"{log}\" 2>&1\"")
+    {
+        Verb = "runas",
+        UseShellExecute = true,
+        WindowStyle = ProcessWindowStyle.Hidden,
+    };
+    using var process = Process.Start(start)!;
+    process.WaitForExit();
+    Console.Write(File.Exists(log) ? File.ReadAllText(log) : "");
+    return process.ExitCode;
+}
+
+static int VddDetach()
+{
+    Altrove.Capture.VirtualDisplay.VirtualMonitor.Detach();
+    Console.WriteLine("Schermo virtuale staccato (se era attaccato).");
+    return 0;
+}
+
+static int Vdd(Options options)
+{
+    foreach (var device in Altrove.Capture.VirtualDisplay.DisplaySettings.List())
+        Console.WriteLine($"  {device.Name} | {device.AdapterString} | {device.MonitorId} | sul desktop: {device.AttachedToDesktop}");
+    var installed = Altrove.Capture.VirtualDisplay.DriverInstaller.IsInstalled();
+    Console.WriteLine($"Driver installato: {installed}");
+    var command = options.Positional ?? "PING";
+    var reply = Altrove.Capture.VirtualDisplay.VddControl.Send(command, TimeSpan.FromSeconds(5));
+    Console.WriteLine(reply is null ? "Il driver non risponde sulla pipe." : $"Risposta a {command}: {reply}");
+    return reply is null ? 1 : 0;
 }
 
 // What a saved .h264 contains: NAL units by type and how much of it is filler.
@@ -279,14 +368,14 @@ static string MachineId() => Convert.ToHexString(System.Security.Cryptography.SH
 [DllImport("user32.dll")]
 static extern bool SetProcessDpiAwarenessContext(nint value);
 
-internal sealed record Options(int Seconds, int Fps, int Height, int Kbps, bool Software, int Monitor, string Out, int Port, string? Positional)
+internal sealed record Options(int Seconds, int Fps, int Height, int Kbps, bool Software, int Monitor, string Out, int Port, string? Positional, string? Display = null)
 {
     public static Options Parse(string[] args)
     {
         int seconds = 5, fps = 60, height = 1080, kbps = 10_000, monitor = 1, port = AltroveProtocol.DefaultPort;
         var software = false;
         var output = "altrove-test.h264";
-        string? positional = null;
+        string? positional = null, display = null;
         for (var i = 0; i < args.Length; i++)
         {
             string Next() => i + 1 < args.Length ? args[++i] : throw new ArgumentException($"{args[i]} vuole un valore");
@@ -300,10 +389,11 @@ internal sealed record Options(int Seconds, int Fps, int Height, int Kbps, bool 
                 case "--monitor": monitor = int.Parse(Next()); break;
                 case "--out": output = Next(); break;
                 case "--port": port = int.Parse(Next()); break;
+                case "--display": display = Next(); break;
                 default: positional = args[i]; break;
             }
         }
-        return new Options(seconds, fps, height, kbps, software, monitor, output, port, positional);
+        return new Options(seconds, fps, height, kbps, software, monitor, output, port, positional, display);
     }
 }
 

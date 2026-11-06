@@ -12,3 +12,12 @@
 *.png     binary
 *.ico     binary
 *.jpg     binary
+
+# Signed driver package: the catalog signs the exact bytes of the INF.
+third_party/** -text
+*.inf     binary
+*.cat     binary
+*.dll     binary
+
+# cmd.exe misreads batch files with bare LF line ends.
+*.cmd     text eol=crlf

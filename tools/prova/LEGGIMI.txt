@@ -1,0 +1,34 @@
+ALTROVE - prova sul PC fisso
+============================
+
+Non serve installare niente: il runtime .NET e' gia' in questa cartella.
+
+1) PROVA DELL'ENCODER
+   Fai doppio clic su prova-encoder.cmd e, mentre lavora, muovi una finestra.
+   Crea due file:
+   - risultato.txt   : nella riga "Encoder:" deve esserci un encoder AMD "(hardware)"
+                       e "conversione GPU"; nella riga "Verifica" i due numeri uguali.
+   - altrove-test.bmp: il primo fotogramma, ridecodificato. Deve sembrare il tuo schermo.
+
+2) PROVA CON IL TABLET
+   - Copia Altrove-ricevitore.apk sul Tab A e installalo
+     (serve consentire l'installazione da origini sconosciute).
+   - Apri Altrove sul tablet: mostra "Pronto a ricevere" e un indirizzo.
+   - Sul PC avvia Altrove.exe. Se Windows chiede l'accesso alla rete,
+     consentilo per le reti private.
+   - Scegli il tablet nell'elenco (oppure scrivi l'indirizzo che mostra) e premi Trasmetti.
+   - In basso nell'app: fps, Mbit/s, tempo di rete, fotogrammi scartati.
+     Sul tablet un tocco mostra fps e tempo di decodifica.
+
+Da mandare: risultato.txt, altrove-test.bmp, le statistiche durante la
+trasmissione e un'impressione sul ritardo (prova a muovere il mouse).
+
+3) PROVA DELLO SCHERMO VIRTUALE (modalita' Estendi)
+   Fai doppio clic su prova-estendi.cmd.
+   - Windows chiede il permesso di amministratore per installare il driver
+     (Virtual Display Driver, open source, firmato): rispondi Si.
+   - Compare un nuovo schermo da 1920x1200 a destra degli altri per 10 secondi:
+     trascinaci una finestra e muovila. Poi sparisce da solo.
+   Crea risultato-estendi.txt ed estendi-test.bmp: mandameli.
+   Nell'app, scegli "Estendi" e Trasmetti: il tablet diventa un monitor in piu'.
+   Per togliere il driver: altrove-cli.exe vdd-uninstall

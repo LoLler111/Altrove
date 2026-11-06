@@ -13,7 +13,7 @@ locale a un'app ricevitore. Non serve Miracast e funziona anche con un PC colleg
 | Protocollo comune ([docs/PROTOCOLLO.md](docs/PROTOCOLLO.md)) | fatto |
 | App Windows: duplica uno schermo verso un ricevitore | fatto |
 | App Android: ricevitore (tablet, telefono, Fire TV con Fire OS) | fatto |
-| Schermo virtuale ed estensione (fase 2) | da fare |
+| Schermo virtuale ed estensione (fase 2) | scritto, da provare sul PC fisso |
 | Ricevitore web per Chromecast e TV LG webOS (fase 3) | da fare |
 | App Android come trasmettitore (fase 4) | da fare |
 | Tocco dal tablet verso il PC, audio (fase 5) | da fare |
@@ -69,12 +69,22 @@ La prima volta Windows può chiedere di permettere ad Altrove l'accesso alla ret
 | `altrove-cli fake-receiver --port 47811` | Un ricevitore finto su localhost che conta cosa arriva |
 | `altrove-cli announce --port 47811` | Fa annunciare a Windows un ricevitore di prova, per testare la ricerca |
 | `altrove-cli analyze file.h264` | Conta le unità NAL per tipo e quanto del flusso è riempitivo |
+| `altrove-cli vdd-install` / `vdd-uninstall` | Installa o toglie il driver dello schermo virtuale (chiede i permessi di amministratore) |
+| `altrove-cli extend --display 1920x1200` | Attacca lo schermo virtuale a quella misura, lo registra come `record` e lo stacca |
+| `altrove-cli vdd [COMANDO]` | Stato del driver e dei display; manda un comando alla sua pipe (es. `RELOAD_DRIVER`) |
+
+### Schermo virtuale (Estendi)
+
+Usa il [Virtual Display Driver](third_party/VirtualDisplayDriver/README.md) (MIT, firmato da SignPath Foundation):
+la prima volta che scegli **Estendi**, Altrove lo installa (Windows chiede il permesso). Durante la trasmissione
+il driver espone un monitor della misura dello schermo del ricevitore, a destra degli altri; a fine trasmissione
+Altrove lo stacca dal desktop. Le impostazioni del driver stanno in `C:\ProgramData\Altrove\VirtualDisplay`.
+In una sessione Desktop remoto il monitor virtuale non si vede: va usato dal PC stesso.
 
 Opzioni comuni: `--fps`, `--height`, `--kbps`, `--monitor N`, `--software` (forza l'encoder software).
 
 ## Limiti noti della fase 1
 
-- Solo duplicazione: l'estensione arriva con lo schermo virtuale (fase 2).
 - Niente audio.
 - Nessun abbinamento: qualunque PC della rete può trasmettere a un ricevitore aperto.
 - I contenuti protetti (Netflix e simili) risultano neri: lo impone il DRM di Windows.

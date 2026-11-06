@@ -10,6 +10,9 @@ Testi per l'utente in italiano, commenti e nomi nel codice in inglese (come in S
 - Pipeline Windows: `ScreenCapture` (WGC, frame BGRA) → `INv12Converter` (video processor GPU, oppure CPU) →
   `H264Encoder` (MFT hardware asincrono con texture D3D11, oppure MFT software sincrono da memoria) →
   `SenderSession` (coda con scarto fino al prossimo IDR quando la rete rallenta).
+- Estendi: `VirtualDisplay/` comanda il Virtual Display Driver (`third_party/`, file firmati: non modificarli,
+  sono binari in git). Il driver non scende sotto 1 monitor: il monitor non si elimina, si stacca dal desktop
+  (`DisplaySettings.Detach`). `RELOAD_DRIVER` rilegge `vdd_settings.xml` al volo; la pipe accetta comandi ma non risponde.
 - Prima scelta sempre l'encoder hardware della GPU che pilota lo schermo; `ParameterSetCache` garantisce SPS/PPS davanti a ogni IDR.
 
 ## Test
@@ -19,3 +22,7 @@ Testi per l'utente in italiano, commenti e nomi nel codice in inglese (come in S
   La ricerca mDNS dall'emulatore non si vede (rete NAT): per provarla usare `altrove-cli announce` + `discover`.
 - La VM di sviluppo non ha GPU (Microsoft Basic Render Driver): lì gira solo il percorso CPU + encoder software.
   Il percorso hardware (GPU, AMF della RX 6750 XT) va provato sul PC fisso.
+- La VM si usa in sessione remota: il driver virtuale è installato lì, ma il suo monitor resta nella sessione
+  console e non si vede. Attacco/stacco e cattura del monitor virtuale si provano solo sul fisso.
+- Zip di prova per il fisso: `dotnet publish` autonomo (win-x64) di App e Cli in `artifacts/Altrove-prova`,
+  più `tools/prova/*` e l'APK.

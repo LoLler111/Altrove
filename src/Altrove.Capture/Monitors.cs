@@ -1,11 +1,13 @@
-using Altrove.Capture.Native;
+﻿using Altrove.Capture.Native;
 
 namespace Altrove.Capture;
 
 /// <summary>A screen Windows knows about. Sizes are physical pixels.</summary>
-public sealed record MonitorInfo(IntPtr Handle, string DeviceName, int Left, int Top, int Width, int Height, bool IsPrimary, int Index)
+public sealed record MonitorInfo(IntPtr Handle, string DeviceName, int Left, int Top, int Width, int Height, bool IsPrimary, int Index, bool IsVirtual = false)
 {
-    public string DisplayName => $"Schermo {Index}{(IsPrimary ? " (principale)" : "")} – {Width}×{Height}";
+    public string DisplayName => IsVirtual
+        ? $"Schermo virtuale di Altrove – {Width}×{Height}"
+        : $"Schermo {Index}{(IsPrimary ? " (principale)" : "")} – {Width}×{Height}";
 
     public override string ToString() => DisplayName;
 }
@@ -26,6 +28,7 @@ public static class Monitors
             return true;
         }, IntPtr.Zero);
 
+        var virtualName = VirtualDisplay.VirtualMonitor.FindDevice()?.Name;
         return found
             .OrderByDescending(m => (m.Info.Flags & PrimaryFlag) != 0)
             .ThenBy(m => m.Info.Monitor.Left)
@@ -38,7 +41,8 @@ public static class Monitors
                 m.Info.Monitor.Right - m.Info.Monitor.Left,
                 m.Info.Monitor.Bottom - m.Info.Monitor.Top,
                 (m.Info.Flags & PrimaryFlag) != 0,
-                i + 1))
+                i + 1,
+                string.Equals(m.Info.Device, virtualName, StringComparison.OrdinalIgnoreCase)))
             .ToList();
     }
 }

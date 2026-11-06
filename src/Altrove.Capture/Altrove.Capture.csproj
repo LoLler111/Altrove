@@ -16,4 +16,10 @@
     <ProjectReference Include="..\Altrove.Core\Altrove.Core.csproj" />
   </ItemGroup>
 
+  <!-- The signed virtual display driver ships next to the apps, installed on first use of "Estendi". -->
+  <ItemGroup>
+    <None Include="..\..\third_party\VirtualDisplayDriver\*" Link="VirtualDisplayDriver\%(Filename)%(Extension)"
+          CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" Visible="false" />
+  </ItemGroup>
+
 </Project>

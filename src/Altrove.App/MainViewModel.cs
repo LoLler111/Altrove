@@ -1,6 +1,7 @@
 using System.Collections.ObjectModel;
 using System.Windows;
 using Altrove.Capture;
+using Altrove.Capture.VirtualDisplay;
 using Altrove.Core.Discovery;
 using Altrove.Core.Protocol;
 using Altrove.Core.Streaming;
@@ -49,13 +50,25 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
         foreach (var address in _settings.ManualAddresses)
             AddManual(address, save: false);
 
-        foreach (var monitor in Monitors.List())
+        // A virtual monitor left on the desktop by a crash: take it off before anything else.
+        try
+        {
+            VirtualMonitor.Detach();
+        }
+        catch (InvalidOperationException)
+        {
+        }
+
+        // The virtual monitor is Estendi's business, never a screen to duplicate.
+        foreach (var monitor in Monitors.List().Where(m => !m.IsVirtual))
             MonitorChoices.Add(new Choice<MonitorInfo> { Label = monitor.DisplayName, Value = monitor });
         Select(MonitorChoices, MonitorChoices.FirstOrDefault(c => c.Value.DeviceName == _settings.LastMonitor) ?? MonitorChoices.FirstOrDefault());
 
         ModeChoices.Add(new Choice<string> { Label = "Duplica", Value = StreamModes.Mirror });
-        ModeChoices.Add(new Choice<string> { Label = "Estendi (in arrivo)", Value = StreamModes.Extend, IsAvailable = false });
-        Select(ModeChoices, ModeChoices[0]);
+        ModeChoices.Add(new Choice<string> { Label = "Estendi", Value = StreamModes.Extend });
+        Select(ModeChoices, ModeChoices.FirstOrDefault(c => c.Value == _settings.Mode) ?? ModeChoices[0]);
+        foreach (var choice in ModeChoices)
+            choice.PropertyChanged += (_, _) => OnPropertyChanged(nameof(IsExtend));
 
         foreach (var (label, value) in new[] { ("Automatica", 0), ("1080p", 1080), ("720p", 720) })
             ResolutionChoices.Add(new Choice<int> { Label = label, Value = value });
@@ -110,6 +123,9 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
     private bool _softwareEncoder;
 
     public bool IsIdle => State == SessionState.Idle;
+
+    /// <summary>Estendi chosen: the screen row does not apply, a new monitor of the receiver's size is made.</summary>
+    public bool IsExtend => Selected(ModeChoices) == StreamModes.Extend;
     public bool CanRemoveSelected => SelectedReceiver?.IsManual == true;
     public string StartStopLabel => State switch
     {
@@ -234,6 +250,9 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
             return;
         }
         SaveChoices(receiver, monitor);
+        var extend = IsExtend;
+        if (extend && !await EnsureVirtualDisplayDriverAsync())
+            return;
 
         State = SessionState.Connecting;
         HasError = false;
@@ -250,15 +269,33 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
                 receiver.Name = name;
 
             var maxHeight = Selected(ResolutionChoices);
-            var (width, height) = session.PlanSize(monitor.Width, monitor.Height, maxHeight > 0 ? maxHeight : null);
-            var settings = new EncoderSettings(width, height, Selected(FpsChoices), Selected(BitrateChoices) * 1000);
+            var fps = Selected(FpsChoices);
+            int width, height;
+            if (extend)
+            {
+                // A new monitor exactly the receiver's shape, streamed 1:1: no scaling, no black bars.
+                Status = $"Creo lo schermo virtuale per {receiver.Name}…";
+                var display = session.Receiver.Display;
+                var mode = VirtualMonitor.PlanMode(display?.Width ?? 1920, display?.Height ?? 1080,
+                    session.Receiver.MaxWidth ?? 1920, session.Receiver.MaxHeight ?? 1080, maxHeight > 0 ? maxHeight : null, fps);
+                _virtualAttached = true;
+                monitor = await VirtualMonitor.AttachAsync(mode, _connecting.Token);
+                (width, height) = (monitor.Width & ~1, monitor.Height & ~1);
+            }
+            else
+            {
+                (width, height) = session.PlanSize(monitor.Width, monitor.Height, maxHeight > 0 ? maxHeight : null);
+            }
+            var settings = new EncoderSettings(width, height, fps, Selected(BitrateChoices) * 1000);
             session.StatsUpdated += OnStats;
             session.Closed += why => Application.Current?.Dispatcher.BeginInvoke(() => _ = StopAsync(why));
 
             _source = new ScreenVideoSource(monitor, SoftwareEncoder);
-            await session.StartAsync(_source, settings, StreamModes.Mirror, _connecting.Token);
+            await session.StartAsync(_source, settings, extend ? StreamModes.Extend : StreamModes.Mirror, _connecting.Token);
             State = SessionState.Streaming;
-            Status = $"In trasmissione su {receiver.Name}: {width}×{height}, {settings.Fps} fps · {_source.EncoderName}";
+            Status = extend
+                ? $"{receiver.Name} è un nuovo schermo a destra degli altri: {width}×{height}, {fps} fps · {_source.EncoderName}"
+                : $"In trasmissione su {receiver.Name}: {width}×{height}, {fps} fps · {_source.EncoderName}";
         }
         catch (OperationCanceledException)
         {
@@ -310,6 +347,18 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
         }
         if (source is not null)
             await source.DisposeAsync();
+        if (_virtualAttached)
+        {
+            _virtualAttached = false;
+            try
+            {
+                VirtualMonitor.Detach();
+            }
+            catch (InvalidOperationException ex)
+            {
+                why = $"Non sono riuscito a staccare lo schermo virtuale: {ex.Message}";
+            }
+        }
         _connecting?.Dispose();
         _connecting = null;
         State = SessionState.Idle;
@@ -328,7 +377,58 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
         _settings.MaxHeight = Selected(ResolutionChoices);
         _settings.Fps = Selected(FpsChoices);
         _settings.BitrateMbps = Selected(BitrateChoices);
+        _settings.Mode = Selected(ModeChoices) ?? StreamModes.Mirror;
         _settings.Save();
+    }
+
+    private bool _virtualAttached;
+
+    /// <summary>
+    /// The first time Estendi is used: explain, then install the driver through an elevated copy of
+    /// Altrove (Windows asks for permission). False if the user declines or it fails.
+    /// </summary>
+    private async Task<bool> EnsureVirtualDisplayDriverAsync()
+    {
+        if (VirtualMonitor.IsDriverInstalled)
+            return true;
+        var answer = MessageBox.Show(
+            "Per estendere lo schermo Altrove installa un driver video, Virtual Display Driver (open source e firmato), " +
+            "che aggiunge a Windows un monitor virtuale. Il monitor esiste solo mentre trasmetti.\n\n" +
+            "Windows chiederà il permesso di amministratore. Procedo?",
+            "Altrove – schermo virtuale", MessageBoxButton.YesNo, MessageBoxImage.Question);
+        if (answer != MessageBoxResult.Yes)
+            return false;
+
+        Status = "Installo lo schermo virtuale…";
+        try
+        {
+            using var process = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(Environment.ProcessPath!, App.InstallVirtualDisplayArgument)
+            {
+                Verb = "runas",
+                UseShellExecute = true,
+            })!;
+            await process.WaitForExitAsync();
+            if (process.ExitCode != 0 || !VirtualMonitor.IsDriverInstalled)
+            {
+                ShowError("L'installazione dello schermo virtuale non è riuscita.");
+                return false;
+            }
+        }
+        catch (System.ComponentModel.Win32Exception)
+        {
+            ShowError("Installazione annullata: senza il permesso di Windows Estendi non è disponibile.");
+            return false;
+        }
+        // The new driver puts its monitor on the desktop at once: off it goes until a stream needs it.
+        await Task.Delay(1500);
+        try
+        {
+            VirtualMonitor.Detach();
+        }
+        catch (InvalidOperationException)
+        {
+        }
+        return true;
     }
 
     public async ValueTask DisposeAsync()
