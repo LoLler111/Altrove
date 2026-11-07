@@ -167,4 +167,25 @@ class ProtocolTest {
         assertEquals("""{"type":"configure","mic":true}""", Messages.encode(Configure(mic = true)))
         assertArrayEquals(byteArrayOf(3, 0, 0, 0, 0, 0, 0, 0, 1, 0, 9, 8), com.altrove.app.receiver.MicCapture.packet(byteArrayOf(9, 8), 0, 2, 256))
     }
+
+    @Test
+    fun pairing_messages_match_the_windows_side() {
+        assertEquals(com.altrove.app.protocol.PairRequest(token = "t0k"), Messages.parse("""{"type":"pair","token":"t0k"}"""))
+        assertEquals(com.altrove.app.protocol.PairRequest(pin = "482913"), Messages.parse("""{"type":"pair","pin":"482913"}"""))
+        assertEquals(com.altrove.app.protocol.PairRequest(), Messages.parse("""{"type":"pair"}"""))
+        assertEquals("""{"type":"pinRequired"}""", Messages.encode(com.altrove.app.protocol.PinRequired()))
+        assertEquals("""{"type":"pinRequired","wrong":true}""", Messages.encode(com.altrove.app.protocol.PinRequired(wrong = true)))
+        assertEquals("""{"type":"paired","token":"t0k"}""", Messages.encode(com.altrove.app.protocol.Paired("t0k")))
+        val hello = Messages.encode(Hello(1, "receiver", "tab", "Tab A", features = listOf(Features.PAIRING)))
+        assertTrue(hello, hello.contains(""""features":["pairing"]"""))
+        assertEquals("""{"type":"bye","reason":"away"}""", Messages.encode(com.altrove.app.protocol.Bye(com.altrove.app.protocol.ByeReasons.AWAY)))
+    }
+
+    @Test
+    fun key_messages_match_the_windows_side() {
+        assertEquals("""{"type":"key","text":"ciao è"}""", Messages.encode(com.altrove.app.protocol.Key(text = "ciao è")))
+        assertEquals("""{"type":"key","key":"c","modifiers":["ctrl"]}""", Messages.encode(com.altrove.app.protocol.Key(key = "c", modifiers = listOf("ctrl"))))
+        assertEquals("""{"type":"key","key":"backspace"}""", Messages.encode(com.altrove.app.protocol.Key(key = "backspace")))
+        assertEquals(com.altrove.app.protocol.Key(key = "pageUp"), Messages.parse("""{"type":"key","key":"pageUp"}"""))
+    }
 }

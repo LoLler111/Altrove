@@ -2,6 +2,7 @@ package com.altrove.app.receiver
 
 import android.util.Log
 import com.altrove.app.protocol.Bye
+import com.altrove.app.protocol.ByeReasons
 import com.altrove.app.protocol.ControlMessage
 import com.altrove.app.protocol.Messages
 import com.altrove.app.protocol.VideoPacket
@@ -10,10 +11,13 @@ import org.java_websocket.handshake.ClientHandshake
 import org.java_websocket.server.WebSocketServer
 import java.net.InetSocketAddress
 import java.nio.ByteBuffer
+import java.util.concurrent.ConcurrentHashMap
 
 /**
- * The WebSocket server senders connect to. One sender at a time: a new one takes the place of the
- * old, which is told why (docs/PROTOCOLLO.md).
+ * The WebSocket server senders connect to. A new connection is pending until the controller lets it in
+ * ([admit]: after its hello, and pairing when that is on); only then it takes the place of the sender
+ * streaming now, which is told why (docs/PROTOCOLLO.md). A stranger on the network can no longer push
+ * the current sender out just by connecting.
  */
 class ReceiverServer(
     port: Int,
@@ -21,6 +25,15 @@ class ReceiverServer(
 ) : WebSocketServer(InetSocketAddress(port)) {
 
     interface Listener {
+        /** A connection opened: send it this receiver's hello. */
+        fun onConnectionOpened(connection: WebSocket)
+
+        /** A message from a connection not admitted yet (hello, pair, ping). */
+        fun onPendingControl(connection: WebSocket, message: ControlMessage)
+
+        fun onPendingClosed(connection: WebSocket)
+
+        /** [connection] was admitted and is now the sender. */
         fun onSenderConnected(connection: WebSocket)
         fun onControl(connection: WebSocket, message: ControlMessage)
         fun onVideo(connection: WebSocket, packet: VideoPacket)
@@ -31,6 +44,7 @@ class ReceiverServer(
     }
 
     @Volatile private var active: WebSocket? = null
+    private val pending = ConcurrentHashMap.newKeySet<WebSocket>()
 
     init {
         isReuseAddr = true
@@ -43,36 +57,60 @@ class ReceiverServer(
         if (connection.isOpen) connection.send(Messages.encode(message))
     }
 
+    /** A message to one connection, admitted or not. */
+    fun sendTo(connection: WebSocket, message: ControlMessage) {
+        if (connection.isOpen) connection.send(Messages.encode(message))
+    }
+
     /** A binary message to the sender (the microphone). */
     fun sendBinary(data: ByteArray) {
         val connection = active ?: return
         if (connection.isOpen) connection.send(data)
     }
 
-    /** Says goodbye to the sender and closes its connection; the server keeps listening. */
-    fun disconnect() {
-        val connection = active ?: return
+    /** [connection] becomes the sender; the one before, if any, is told it was replaced. */
+    @Synchronized
+    fun admit(connection: WebSocket) {
+        if (!pending.remove(connection) || !connection.isOpen) return
+        val previous = active
+        active = connection
+        if (previous != null) {
+            listener.onSenderDisconnected(previous)
+            if (previous.isOpen) {
+                previous.send(Messages.encode(Bye(ByeReasons.REPLACED)))
+                previous.close()
+            }
+        }
+        listener.onSenderConnected(connection)
+    }
+
+    /** Sends [reason] to a connection and closes it (a pending one refused, or the sender). */
+    fun reject(connection: WebSocket, reason: String) {
         if (connection.isOpen) {
-            connection.send(Messages.encode(Bye("user")))
+            connection.send(Messages.encode(Bye(reason)))
             connection.close()
         }
+    }
+
+    /** Says goodbye to the sender and closes its connection; the server keeps listening. */
+    fun disconnect(reason: String = ByeReasons.USER) {
+        val connection = active ?: return
+        reject(connection, reason)
     }
 
     override fun onStart() = listener.onServerStarted(port)
 
     override fun onOpen(connection: WebSocket, handshake: ClientHandshake) {
-        val previous = active
-        active = connection
-        if (previous != null && previous.isOpen) {
-            previous.send(Messages.encode(Bye("replaced")))
-            previous.close()
-        }
-        listener.onSenderConnected(connection)
+        pending.add(connection)
+        listener.onConnectionOpened(connection)
     }
 
     override fun onMessage(connection: WebSocket, message: String) {
-        if (connection !== active) return
-        Messages.parse(message)?.let { listener.onControl(connection, it) }
+        val parsed = Messages.parse(message) ?: return
+        when {
+            connection === active -> listener.onControl(connection, parsed)
+            connection in pending -> listener.onPendingControl(connection, parsed)
+        }
     }
 
     override fun onMessage(connection: WebSocket, message: ByteBuffer) {
@@ -87,10 +125,15 @@ class ReceiverServer(
     }
 
     override fun onClose(connection: WebSocket, code: Int, reason: String?, remote: Boolean) {
-        if (connection === active) {
-            active = null
-            listener.onSenderDisconnected(connection)
+        if (pending.remove(connection)) {
+            listener.onPendingClosed(connection)
+            return
         }
+        synchronized(this) {
+            if (connection !== active) return
+            active = null
+        }
+        listener.onSenderDisconnected(connection)
     }
 
     override fun onError(connection: WebSocket?, error: Exception) {

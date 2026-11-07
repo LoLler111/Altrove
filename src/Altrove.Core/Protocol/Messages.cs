@@ -32,6 +32,10 @@ public sealed record DisplayInfo(int Width, int Height, double RefreshRate);
 [JsonDerivedType(typeof(AudioStopMessage), "audioStop")]
 [JsonDerivedType(typeof(MicStartMessage), "micStart")]
 [JsonDerivedType(typeof(MicStopMessage), "micStop")]
+[JsonDerivedType(typeof(PairMessage), "pair")]
+[JsonDerivedType(typeof(PinRequiredMessage), "pinRequired")]
+[JsonDerivedType(typeof(PairedMessage), "paired")]
+[JsonDerivedType(typeof(KeyMessage), "key")]
 public abstract record ControlMessage
 {
     private static readonly JsonSerializerOptions Options = new(JsonSerializerDefaults.Web)
@@ -58,7 +62,7 @@ public abstract record ControlMessage
     }
 
     private static readonly HashSet<string> KnownTypes =
-        ["hello", "start", "stop", "keyframe", "ping", "pong", "stats", "bye", "settings", "configure", "touch", "mouse", "audioStart", "audioStop", "micStart", "micStop"];
+        ["hello", "start", "stop", "keyframe", "ping", "pong", "stats", "bye", "settings", "configure", "touch", "mouse", "audioStart", "audioStop", "micStart", "micStop", "pair", "pinRequired", "paired", "key"];
 }
 
 public static class Roles
@@ -93,6 +97,12 @@ public static class Features
 
     /// <summary>The sender takes the receiver's microphone and makes it a Windows microphone.</summary>
     public const string Mic = "mic";
+
+    /// <summary>Receiver: a sender must pair (pair → paired) before anything else. Sender: it knows how to.</summary>
+    public const string Pairing = "pairing";
+
+    /// <summary>The sender accepts key messages: the receiver types on the PC.</summary>
+    public const string Keyboard = "keyboard";
 }
 
 public static class TouchStates
@@ -125,6 +135,15 @@ public static class ByeReasons
     public const string Replaced = "replaced";
     public const string Protocol = "protocol";
     public const string Error = "error";
+
+    /// <summary>The receiver went to the background or its screen turned off: it listens again when it is back.</summary>
+    public const string Away = "away";
+
+    /// <summary>Pairing failed or was refused on the receiver.</summary>
+    public const string Pairing = "pairing";
+
+    /// <summary>The other side is too old for something this side requires (pairing).</summary>
+    public const string Update = "update";
 }
 
 public sealed record HelloMessage(
@@ -221,3 +240,49 @@ public sealed record AudioStopMessage : ControlMessage;
 public sealed record MicStartMessage(string Codec, int SampleRate, int Channels, int FrameMs) : ControlMessage;
 
 public sealed record MicStopMessage : ControlMessage;
+
+/// <summary>
+/// Sender → receiver, right after the hellos when the receiver announced <see cref="Features.Pairing"/>: the token
+/// of an earlier pairing, or the PIN the receiver is showing.
+/// </summary>
+public sealed record PairMessage(string? Token = null, string? Pin = null) : ControlMessage;
+
+/// <summary>Receiver → sender: it shows a PIN for the user to type on the sender; <c>Wrong</c> after a wrong one.</summary>
+public sealed record PinRequiredMessage(bool Wrong = false) : ControlMessage;
+
+/// <summary>Receiver → sender: paired; <c>Token</c> opens the next connections to this receiver without a PIN.</summary>
+public sealed record PairedMessage(string Token) : ControlMessage;
+
+/// <summary>Named keys of <see cref="KeyMessage"/>; a single letter or digit is a key too (for shortcuts).</summary>
+public static class KeyNames
+{
+    public const string Enter = "enter";
+    public const string Backspace = "backspace";
+    public const string Delete = "delete";
+    public const string Tab = "tab";
+    public const string Escape = "escape";
+    public const string Space = "space";
+    public const string Left = "left";
+    public const string Right = "right";
+    public const string Up = "up";
+    public const string Down = "down";
+    public const string Home = "home";
+    public const string End = "end";
+    public const string PageUp = "pageUp";
+    public const string PageDown = "pageDown";
+    public const string Win = "win";
+}
+
+public static class KeyModifiers
+{
+    public const string Ctrl = "ctrl";
+    public const string Alt = "alt";
+    public const string Shift = "shift";
+    public const string Win = "win";
+}
+
+/// <summary>
+/// Receiver → sender (feature <see cref="Features.Keyboard"/>): <c>Text</c> to type as it is, or one <c>Key</c>
+/// (a <see cref="KeyNames"/> name, a letter or a digit) pressed while the <c>Modifiers</c> are held.
+/// </summary>
+public sealed record KeyMessage(string? Text = null, string? Key = null, IReadOnlyList<string>? Modifiers = null) : ControlMessage;

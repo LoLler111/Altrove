@@ -89,6 +89,8 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
         _allowTouch = _settings.AllowTouch;
         _sendAudio = _settings.SendAudio;
         _useTabletMic = _settings.UseTabletMic;
+        _adaptiveBitrate = _settings.AdaptiveBitrate;
+        _pairing = new PcPairing(_settings);
         SelectedReceiver = Receivers.FirstOrDefault(r => r.Id == _settings.LastReceiverId);
 
         // While streaming, a choice made on the PC applies at once, like one from the receiver's panel.
@@ -142,8 +144,8 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
     private (string? Mode, string? Monitor, int Height, int Fps, int Mbps, bool Software) CurrentChoices() =>
         (Selected(ModeChoices), Selected(MonitorChoices)?.DeviceName, Selected(ResolutionChoices), Selected(FpsChoices), Selected(BitrateChoices), SoftwareEncoder);
 
-    /// <summary>Settings can be changed while idle and while streaming, not while connecting.</summary>
-    public bool CanChangeChoices => State != SessionState.Connecting;
+    /// <summary>Settings can be changed while idle and while streaming, not while connecting or reconnecting.</summary>
+    public bool CanChangeChoices => State is SessionState.Idle or SessionState.Streaming;
 
     private void OnChoiceChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
     {
@@ -332,6 +334,18 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
         _settings.SoftwareEncoder = value;
         _settings.Save();
         QueueLocalChange();
+    }
+
+    /// <summary>The bitrate goes down when the network falls behind, and back up to the chosen one.</summary>
+    [ObservableProperty]
+    private bool _adaptiveBitrate;
+
+    partial void OnAdaptiveBitrateChanged(bool value)
+    {
+        _settings.AdaptiveBitrate = value;
+        _settings.Save();
+        if (_session is { } session)
+            session.AdaptBitrate = value;
     }
 
     /// <summary>The receiver may work the PC by touch (taps become clicks on the streamed screen).</summary>
@@ -576,6 +590,7 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
     private bool CanStartStop() => State != SessionState.Idle || SelectedReceiver is not null;
 
     private CancellationTokenSource? _connecting;
+    private readonly PcPairing _pairing;
 
     [RelayCommand(CanExecute = nameof(CanStartStop))]
     private async Task StartStop()
@@ -583,6 +598,7 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
         switch (State)
         {
             case SessionState.Connecting:
+            case SessionState.Reconnecting:
                 _connecting?.Cancel();
                 return;
             case SessionState.Streaming:
@@ -591,8 +607,7 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
         }
 
         var receiver = SelectedReceiver!;
-        var monitor = Selected(MonitorChoices);
-        if (monitor is null)
+        if (Selected(MonitorChoices) is null)
         {
             ShowError("Nessuno schermo da trasmettere.");
             return;
@@ -608,41 +623,12 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
         _connecting = new CancellationTokenSource();
         try
         {
-            List<string> features = [Features.Configure, Features.Scale, Features.Audio, Features.Mic];
-            // Always offered: the PC's check box can turn them on and off during the stream.
-            features.AddRange([Features.Touch, Features.Mouse]);
-            var self = new HelloMessage(AltroveProtocol.Version, Roles.Sender, _settings.DeviceId, Environment.MachineName,
-                typeof(MainViewModel).Assembly.GetName().Version?.ToString(3), Features: features);
-            var session = await SenderSession.ConnectAsync(ReceiverAddress.ToUri(receiver.Host, receiver.Port), self, _connecting.Token);
-            _session = session;
-            _receiverName = receiver.Name = session.Receiver.Name is { Length: > 0 } name ? name : receiver.Name;
-            session.StatsUpdated += OnStats;
-            session.Closed += why => Application.Current?.Dispatcher.BeginInvoke(() => _ = StopAsync(why));
-            session.ConfigureRequested += request => Application.Current?.Dispatcher.BeginInvoke(() => _ = ConfigureAsync(request));
-            {
-                try
-                {
-                    _touch = new TouchInjector(monitor);
-                    session.TouchReceived += OnTouch;
-                }
-                catch (System.ComponentModel.Win32Exception)
-                {
-                    _touch = null; // Windows too old for synthetic touch: stream without it
-                }
-                _mouse = new MouseInjector(monitor);
-                session.MouseReceived += OnMouse;
-            }
-
-            await StartStreamAsync(session, _connecting.Token);
-            // The receiver's microphone goes to "Microfono Altrove" whenever a bridge is running.
-            session.MicStarted += format => _mic?.Begin(format);
-            session.MicStopped += () => _mic?.End();
-            session.MicPacketReceived += packet => _mic?.Push(packet);
-            if (SendAudio)
-                StartAudio(session);
-            ApplyMic();
-            session.SendSettings(CurrentSettings(null)); // the first settings went out before sound and microphone were on
+            await ConnectAndStreamAsync(receiver, _connecting.Token);
             State = SessionState.Streaming;
+        }
+        catch (PairingCancelledException)
+        {
+            await StopAsync("Collegamento annullato: serve il PIN che mostra il ricevitore.");
         }
         catch (OperationCanceledException) when (_connecting?.IsCancellationRequested == true)
         {
@@ -661,7 +647,131 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
         }
     }
 
+    /// <summary>
+    /// Connects (pairing if the receiver wants it) and starts picture, input, sound and microphone: everything a
+    /// stream needs, the first time and after a lost connection.
+    /// </summary>
+    private async Task ConnectAndStreamAsync(ReceiverItem receiver, CancellationToken token)
+    {
+        var monitor = Selected(MonitorChoices)!;
+        List<string> features = [Features.Configure, Features.Scale, Features.Audio, Features.Mic, Features.Pairing];
+        // Always offered: the PC's check box can turn them on and off during the stream.
+        features.AddRange([Features.Touch, Features.Mouse, Features.Keyboard]);
+        var self = new HelloMessage(AltroveProtocol.Version, Roles.Sender, _settings.DeviceId, Environment.MachineName,
+            typeof(MainViewModel).Assembly.GetName().Version?.ToString(3), Features: features);
+        var session = await SenderSession.ConnectAsync(ReceiverAddress.ToUri(receiver.Host, receiver.Port), self, _pairing, token);
+        _session = session;
+        _receiverName = receiver.Name = session.Receiver.Name is { Length: > 0 } name ? name : receiver.Name;
+        session.AdaptBitrate = AdaptiveBitrate;
+        session.StatsUpdated += OnStats;
+        session.Closed += why => Application.Current?.Dispatcher.BeginInvoke(() => _ = OnSessionClosedAsync(session, why));
+        session.ConfigureRequested += request => Application.Current?.Dispatcher.BeginInvoke(() => _ = ConfigureAsync(request));
+        try
+        {
+            _touch = new TouchInjector(monitor);
+            session.TouchReceived += OnTouch;
+        }
+        catch (System.ComponentModel.Win32Exception)
+        {
+            _touch = null; // Windows too old for synthetic touch: stream without it
+        }
+        _mouse = new MouseInjector(monitor);
+        session.MouseReceived += OnMouse;
+        _keyboard = new KeyboardInjector();
+        session.KeyReceived += OnKey;
+
+        await StartStreamAsync(session, token);
+        // The receiver's microphone goes to "Microfono Altrove" whenever a bridge is running.
+        session.MicStarted += format => _mic?.Begin(format);
+        session.MicStopped += () => _mic?.End();
+        session.MicPacketReceived += packet => _mic?.Push(packet);
+        if (SendAudio)
+            StartAudio(session);
+        ApplyMic();
+        session.SendSettings(CurrentSettings(null)); // the first settings went out before sound and microphone were on
+    }
+
+    // ---- A lost connection: try again for a while, with the same choices ----
+
+    private static readonly TimeSpan ReconnectFor = TimeSpan.FromMinutes(2);
+    private static readonly TimeSpan ReconnectEvery = TimeSpan.FromSeconds(3);
+    private static readonly TimeSpan ReconnectProbeTimeout = TimeSpan.FromSeconds(4);
+
+    private async Task OnSessionClosedAsync(SenderSession session, string why)
+    {
+        // Our own StopAsync closes sessions too: those are already let go.
+        if (!ReferenceEquals(_session, session))
+            return;
+        if (session.CanReconnect && State == SessionState.Streaming && SelectedReceiver is { } receiver)
+            await ReconnectAsync(receiver, why);
+        else
+            await StopAsync(why);
+    }
+
+    /// <summary>
+    /// The receiver dropped off the network, went to the background or turned its screen off: keep trying for
+    /// <see cref="ReconnectFor"/>. The virtual monitor stays, so the windows on it stay where they are.
+    /// </summary>
+    private async Task ReconnectAsync(ReceiverItem lost, string why)
+    {
+        var name = _receiverName;
+        App.Log($"Connessione persa con {name}: {why} Riprovo per {ReconnectFor.TotalSeconds:0} s.");
+        await ReleaseStreamAsync(keepVirtualMonitor: true);
+        State = SessionState.Reconnecting;
+        HasError = false;
+        Stats = "";
+        _connecting?.Dispose();
+        _connecting = new CancellationTokenSource();
+        var token = _connecting.Token;
+        var deadline = DateTime.UtcNow + ReconnectFor;
+        var attempts = 0;
+        try
+        {
+            while (DateTime.UtcNow < deadline)
+            {
+                var left = (int)Math.Ceiling((deadline - DateTime.UtcNow).TotalSeconds);
+                Status = $"{why} Riprovo a collegarmi a {name}… (ancora {left} s)";
+                // The receiver may come back with another address: the one discovery knows now.
+                var receiver = Receivers.FirstOrDefault(r => r.Id == lost.Id) ?? lost;
+                // More patience than the dots in the list: a tablet waking up answers slowly, and Windows takes about
+                // 2 s to give up on "localhost" over IPv6 before trying IPv4 (the emulator behind adb forward).
+                if (await ReceiverProbe.IsReachableAsync(receiver.Host, receiver.Port, ReconnectProbeTimeout, token))
+                {
+                    attempts++;
+                    try
+                    {
+                        await ConnectAndStreamAsync(receiver, token);
+                        State = SessionState.Streaming;
+                        App.Log($"Ricollegato a {name} al tentativo {attempts}.");
+                        return;
+                    }
+                    catch (Exception ex) when (ex is not OperationCanceledException || !token.IsCancellationRequested)
+                    {
+                        App.Log($"Nuovo collegamento a {name} non riuscito: {ex.Message}");
+                        await ReleaseStreamAsync(keepVirtualMonitor: true);
+                        if (ex is PairingCancelledException)
+                            throw;
+                    }
+                }
+                await Task.Delay(ReconnectEvery, token);
+            }
+            await StopAsync(null);
+            ShowError($"{name} non è tornato entro {ReconnectFor.TotalMinutes:0} minuti: trasmissione fermata.");
+        }
+        catch (OperationCanceledException)
+        {
+            await StopAsync("Trasmissione fermata.");
+        }
+        catch (Exception ex)
+        {
+            App.Log($"Riconnessione fallita: {ex}");
+            await StopAsync(null);
+            ShowError($"Non sono riuscito a ricollegarmi a {name}: {ex.Message}");
+        }
+    }
+
     private string _receiverName = "";
+    private KeyboardInjector? _keyboard;
     private TouchInjector? _touch;
     private readonly SemaphoreSlim _reconfiguring = new(1, 1);
 
@@ -678,6 +788,12 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
     {
         if (AllowTouch)
             _mouse?.Inject(mouse);
+    }
+
+    private void OnKey(KeyMessage key)
+    {
+        if (AllowTouch)
+            _keyboard?.Inject(key);
     }
 
     /// <summary>Selects the resolution chip for <paramref name="height"/>, adding one if a receiver picked a height the PC does not list.</summary>
@@ -944,6 +1060,8 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
     private void OnStats(SenderStats s) => Application.Current?.Dispatcher.BeginInvoke(() =>
     {
         var parts = new List<string> { $"{s.SentFps:0} fps", $"{s.Mbps:0.0} Mbit/s" };
+        if (s.CeilingKbps > 0 && s.TargetKbps < s.CeilingKbps)
+            parts.Add($"qualità adattata alla rete: {s.TargetKbps / 1000.0:0.#} di {s.CeilingKbps / 1000} Mbit/s");
         if (s.RoundTripMs is { } rtt)
             parts.Add($"rete {rtt:0} ms");
         if (s.ReceiverFps is { } fps)
@@ -955,6 +1073,23 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
 
     private async Task StopAsync(string? why)
     {
+        _connecting?.Cancel(); // a reconnection in progress, if any
+        if (await ReleaseStreamAsync(keepVirtualMonitor: false) is { } detachError)
+            why = detachError;
+        _connecting?.Dispose();
+        _connecting = null;
+        State = SessionState.Idle;
+        Stats = "";
+        if (why is not null)
+        {
+            HasError = false;
+            Status = why;
+        }
+    }
+
+    /// <summary>Lets go of the session and everything streaming through it. Returns why the virtual monitor stayed, if it did.</summary>
+    private async Task<string?> ReleaseStreamAsync(bool keepVirtualMonitor)
+    {
         var session = _session;
         var source = _source;
         _session = null;
@@ -964,11 +1099,13 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
             session.StatsUpdated -= OnStats;
             session.TouchReceived -= OnTouch;
             session.MouseReceived -= OnMouse;
+            session.KeyReceived -= OnKey;
             await session.DisposeAsync();
         }
         _touch?.Dispose();
         _touch = null;
         _mouse = null;
+        _keyboard = null;
         if (_mic is not null)
             App.Log($"Microfono Altrove spento: ricevuti {_mic.PacketsReceived} pacchetti di voce, {_mic.SecondsDecoded:0.0} s decodificati.");
         _mic?.Dispose();
@@ -979,7 +1116,7 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
         _streamTarget = null;
         if (source is not null)
             await source.DisposeAsync();
-        if (_virtualAttached)
+        if (_virtualAttached && !keepVirtualMonitor)
         {
             _virtualAttached = false;
             try
@@ -988,18 +1125,10 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
             }
             catch (InvalidOperationException ex)
             {
-                why = $"Non sono riuscito a staccare lo schermo virtuale: {ex.Message}";
+                return $"Non sono riuscito a staccare lo schermo virtuale: {ex.Message}";
             }
         }
-        _connecting?.Dispose();
-        _connecting = null;
-        State = SessionState.Idle;
-        Stats = "";
-        if (why is not null)
-        {
-            HasError = false;
-            Status = why;
-        }
+        return null;
     }
 
     private void SaveChoices()
@@ -1079,4 +1208,6 @@ public enum SessionState
     Idle,
     Connecting,
     Streaming,
+    /// <summary>The connection dropped: trying again on its own for a while.</summary>
+    Reconnecting,
 }

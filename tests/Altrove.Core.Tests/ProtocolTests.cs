@@ -219,4 +219,29 @@ public class ProtocolTests
         Assert.IsType<MicStopMessage>(ControlMessage.Parse("{\"type\":\"micStop\"}"));
         Assert.True(Assert.IsType<ConfigureMessage>(ControlMessage.Parse("{\"type\":\"configure\",\"mic\":true}")).Mic);
     }
+
+    [Fact]
+    public void Pairing_messages_match_the_android_side()
+    {
+        Assert.Equal("{\"type\":\"pair\",\"token\":\"t0k\"}", new PairMessage(Token: "t0k").ToJson());
+        Assert.Equal("{\"type\":\"pair\",\"pin\":\"482913\"}", new PairMessage(Pin: "482913").ToJson());
+        Assert.Equal("{\"type\":\"pair\"}", new PairMessage().ToJson());
+        Assert.False(Assert.IsType<PinRequiredMessage>(ControlMessage.Parse("{\"type\":\"pinRequired\"}")).Wrong);
+        Assert.True(Assert.IsType<PinRequiredMessage>(ControlMessage.Parse("{\"type\":\"pinRequired\",\"wrong\":true}")).Wrong);
+        Assert.Equal("t0k", Assert.IsType<PairedMessage>(ControlMessage.Parse("{\"type\":\"paired\",\"token\":\"t0k\"}")).Token);
+        var hello = Assert.IsType<HelloMessage>(ControlMessage.Parse(
+            "{\"type\":\"hello\",\"protocol\":1,\"role\":\"receiver\",\"id\":\"tab\",\"name\":\"Tab A\",\"features\":[\"pairing\"]}"));
+        Assert.True(hello.Supports(Features.Pairing));
+        Assert.Equal(ByeReasons.Away, Assert.IsType<ByeMessage>(ControlMessage.Parse("{\"type\":\"bye\",\"reason\":\"away\"}")).Reason);
+    }
+
+    [Fact]
+    public void Key_messages_match_the_android_side()
+    {
+        Assert.Equal(new KeyMessage(Text: "ciao è"), ControlMessage.Parse("{\"type\":\"key\",\"text\":\"ciao è\"}"));
+        var shortcut = Assert.IsType<KeyMessage>(ControlMessage.Parse("{\"type\":\"key\",\"key\":\"c\",\"modifiers\":[\"ctrl\"]}"));
+        Assert.Equal(("c", "ctrl"), (shortcut.Key, shortcut.Modifiers!.Single()));
+        Assert.Equal(KeyNames.Backspace, Assert.IsType<KeyMessage>(ControlMessage.Parse("{\"type\":\"key\",\"key\":\"backspace\"}")).Key);
+        Assert.Equal("{\"type\":\"key\",\"key\":\"pageUp\"}", new KeyMessage(Key: KeyNames.PageUp).ToJson());
+    }
 }

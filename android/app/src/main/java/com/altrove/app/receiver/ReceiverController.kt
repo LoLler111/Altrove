@@ -13,6 +13,11 @@ import com.altrove.app.protocol.AudioStart
 import com.altrove.app.protocol.AudioStop
 import com.altrove.app.protocol.MicStop
 import com.altrove.app.protocol.Bye
+import com.altrove.app.protocol.ByeReasons
+import com.altrove.app.protocol.Key
+import com.altrove.app.protocol.PairRequest
+import com.altrove.app.protocol.Paired
+import com.altrove.app.protocol.PinRequired
 import com.altrove.app.protocol.Configure
 import com.altrove.app.protocol.Features
 import com.altrove.app.protocol.StreamSettings
@@ -119,6 +124,135 @@ class ReceiverController(private val context: Context) : ReceiverServer.Listener
         if (sendsMouse) server?.send(mouse)
     }
 
+    /** The PC types what this device's keyboard sends (feature [Features.KEYBOARD]). */
+    val acceptsKeys get() = Features.KEYBOARD in _features.value
+
+    fun sendKey(key: Key) {
+        if (acceptsKeys) server?.send(key)
+    }
+
+    // ---- Pairing: a PC types the PIN shown here once, then connects with its token ----
+
+    /** A PC waiting for the PIN on this screen. */
+    data class PinRequest(val senderName: String, val pin: String, val wrong: Boolean)
+
+    private val pairing = Pairing(Pairing.PreferencesStore(context.getSharedPreferences("altrove_paired", Context.MODE_PRIVATE)))
+    private val pendingHellos = java.util.concurrent.ConcurrentHashMap<WebSocket, Hello>()
+    private val _pinRequest = MutableStateFlow<PinRequest?>(null)
+    private val _requirePin = MutableStateFlow(prefs.getBoolean("requirePin", true))
+    private val _trustedPcs = MutableStateFlow(pairing.trustedNames)
+    private val _notice = MutableStateFlow<String?>(null)
+    @Volatile private var pinConnection: WebSocket? = null
+    private var pinTimeout: Job? = null
+
+    /** The PIN to show, while a new PC waits for it. */
+    val pinRequest: StateFlow<PinRequest?> = _pinRequest
+    /** The user's choice: a new PC must type a PIN shown here. */
+    val requirePin: StateFlow<Boolean> = _requirePin
+    /** The PCs that connect without a PIN. */
+    val trustedPcs: StateFlow<List<String>> = _trustedPcs
+    /** A line for the waiting screen: why the last PC was turned away. */
+    val notice: StateFlow<String?> = _notice
+
+    fun setRequirePin(on: Boolean) {
+        _requirePin.value = on
+        prefs.edit().putBoolean("requirePin", on).apply()
+    }
+
+    fun forgetTrustedPcs() {
+        pairing.forgetAll()
+        _trustedPcs.value = pairing.trustedNames
+    }
+
+    /** "Rifiuta" under the PIN: that PC is sent away. */
+    fun refusePin() {
+        val connection = pinConnection ?: return
+        clearPin()
+        pendingHellos[connection]?.let { pairing.cancel(it.id) }
+        server?.reject(connection, ByeReasons.PAIRING)
+    }
+
+    private fun clearPin() {
+        pinTimeout?.cancel()
+        pinConnection = null
+        _pinRequest.value = null
+    }
+
+    override fun onConnectionOpened(connection: WebSocket) {
+        val hello = Hello(
+            protocol = AltroveProtocol.VERSION,
+            role = "receiver",
+            id = deviceId,
+            name = deviceName(),
+            app = BuildConfig.VERSION_NAME,
+            display = shownDisplay,
+            codecs = listOf("h264"),
+            maxWidth = maxStreamSize().first,
+            maxHeight = maxStreamSize().second,
+            features = if (_requirePin.value) listOf(Features.PAIRING) else null,
+            audioCodecs = audioCodecs,
+        )
+        connection.send(Messages.encode(hello))
+    }
+
+    override fun onPendingControl(connection: WebSocket, message: ControlMessage) {
+        val server = server ?: return
+        when (message) {
+            is Hello -> {
+                if (message.protocol != AltroveProtocol.VERSION) {
+                    server.reject(connection, ByeReasons.PROTOCOL)
+                    return
+                }
+                pendingHellos[connection] = message
+                when {
+                    !_requirePin.value -> server.admit(connection)
+                    !message.supports(Features.PAIRING) -> {
+                        _notice.value = "«${message.name}» ha una versione di Altrove che non sa usare il PIN: aggiornala sul PC, " +
+                            "oppure qui sotto spegni «Chiedi un PIN ai PC nuovi»."
+                        server.reject(connection, ByeReasons.UPDATE)
+                    }
+                    // Otherwise the PC sends pair next.
+                }
+            }
+            is PairRequest -> {
+                val hello = pendingHellos[connection] ?: return
+                when (val answer = pairing.onPair(hello.id, hello.name, message)) {
+                    is Pairing.Answer.Accepted -> {
+                        if (pinConnection === connection) clearPin()
+                        _trustedPcs.value = pairing.trustedNames
+                        server.sendTo(connection, Paired(answer.token))
+                        server.admit(connection)
+                    }
+                    is Pairing.Answer.ShowPin -> {
+                        // One PIN on screen at a time: a second PC asking takes the place of the first.
+                        pinConnection?.takeIf { it !== connection }?.let { server.reject(it, ByeReasons.PAIRING) }
+                        pinConnection = connection
+                        _pinRequest.value = PinRequest(hello.name, answer.pin, answer.wrong)
+                        server.sendTo(connection, PinRequired(answer.wrong))
+                        pinTimeout?.cancel()
+                        pinTimeout = scope.launch {
+                            delay(PIN_TIMEOUT_MS)
+                            if (pinConnection === connection) refusePin()
+                        }
+                    }
+                    Pairing.Answer.Refused -> {
+                        clearPin()
+                        _notice.value = "Troppi PIN sbagliati da «${hello.name}»: collegamento rifiutato."
+                        server.reject(connection, ByeReasons.PAIRING)
+                    }
+                }
+            }
+            is Ping -> server.sendTo(connection, Pong(message.t))
+            is Bye -> connection.close()
+            else -> Unit
+        }
+    }
+
+    override fun onPendingClosed(connection: WebSocket) {
+        pendingHellos.remove(connection)?.let { pairing.cancel(it.id) }
+        if (pinConnection === connection) clearPin()
+    }
+
     /** Asks the sender for other settings; [applying] stays true until its new settings arrive. */
     fun configure(request: Configure) {
         if (Features.CONFIGURE !in _features.value) return
@@ -154,8 +288,11 @@ class ReceiverController(private val context: Context) : ReceiverServer.Listener
         releaseMic(tellSender = true)
         advertiser.stop()
         statsJob?.cancel()
+        clearPin()
+        pendingHellos.clear()
         server?.let {
-            it.send(Bye("user"))
+            // Background or screen off, not the user's choice: the PC tries again for a while.
+            it.send(Bye(ByeReasons.AWAY))
             try {
                 it.stop(500)
             } catch (_: InterruptedException) {
@@ -240,33 +377,15 @@ class ReceiverController(private val context: Context) : ReceiverServer.Listener
     }
 
     override fun onSenderConnected(connection: WebSocket) {
-        val hello = Hello(
-            protocol = AltroveProtocol.VERSION,
-            role = "receiver",
-            id = deviceId,
-            name = deviceName(),
-            app = BuildConfig.VERSION_NAME,
-            display = shownDisplay,
-            codecs = listOf("h264"),
-            maxWidth = maxStreamSize().first,
-            maxHeight = maxStreamSize().second,
-            audioCodecs = audioCodecs,
-        )
-        connection.send(Messages.encode(hello))
+        val hello = pendingHellos.remove(connection)
+        senderName = hello?.name ?: ""
+        _features.value = hello?.features.orEmpty().toSet()
+        _notice.value = null
+        _state.value = ReceiverState.Connected(senderName)
     }
 
     override fun onControl(connection: WebSocket, message: ControlMessage) {
         when (message) {
-            is Hello -> {
-                if (message.protocol != AltroveProtocol.VERSION) {
-                    connection.send(Messages.encode(Bye("protocol")))
-                    connection.close()
-                    return
-                }
-                senderName = message.name
-                _features.value = message.features.orEmpty().toSet()
-                _state.value = ReceiverState.Connected(senderName)
-            }
             is Start -> {
                 synchronized(lock) {
                     stream = message
@@ -393,6 +512,11 @@ class ReceiverController(private val context: Context) : ReceiverServer.Listener
                     (decoder.decoderName?.let { " · $it" } ?: "")
             }
         }
+    }
+
+    private companion object {
+        /** A PIN left on screen this long without the right answer is withdrawn. */
+        const val PIN_TIMEOUT_MS = 120_000L
     }
 
     private fun waiting(port: Int = server?.port ?: AltroveProtocol.DEFAULT_PORT) =

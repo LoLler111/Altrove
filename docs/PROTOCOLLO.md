@@ -39,6 +39,13 @@ Se la scoperta non funziona si può sempre scrivere l'indirizzo a mano: `192.168
 
 Il ricevitore accetta un trasmettitore alla volta: se ne arriva un secondo mentre uno sta già
 trasmettendo, il nuovo prende il posto del vecchio (che riceve `bye` con `reason: "replaced"`).
+Dalla 0.5 il nuovo prende il posto del vecchio solo dopo il suo `hello` e, se il ricevitore chiede l'abbinamento,
+solo dopo `paired`: fino ad allora il ricevitore gli risponde solo a `hello`, `pair` e `ping`.
+
+Il trasmettitore considera persa la connessione anche quando per 8 s non arriva niente dal ricevitore (che
+risponde a un `ping` ogni secondo): un Wi-Fi che cade lascia il socket aperto per minuti.
+Se la connessione si perde, o il ricevitore se ne va con `bye` e `reason: "away"`, il trasmettitore Windows
+riprova da solo per 2 minuti con le stesse scelte (il monitor virtuale di Estendi resta attaccato).
 
 ## Messaggi di controllo (testo JSON)
 
@@ -75,9 +82,36 @@ Nel proprio `hello` ciascun lato può elencare le funzioni facoltative che gesti
 | `scale` | trasmettitore | in `extend` il ricevitore può scegliere la scala (DPI) dello schermo virtuale (dalla 0.3) |
 | `audio` | trasmettitore | manda l'audio del PC (se il ricevitore ha `audioCodecs`) e accetta `configure` con `audio` (dalla 0.4) |
 | `mic` | trasmettitore | accetta la voce del microfono del ricevitore e la presenta a Windows come «Microfono Altrove» (dalla 0.4) |
+| `pairing` | ricevitore | prima di tutto il resto il trasmettitore deve abbinarsi (`pair` → `paired`, vedi sotto) (dalla 0.5) |
+| `pairing` | trasmettitore | sa abbinarsi; un ricevitore che chiede l'abbinamento chiude con `bye` `update` chi non lo annuncia (dalla 0.5) |
+| `keyboard` | trasmettitore | accetta i messaggi `key`: il ricevitore scrive sul PC (dalla 0.5) |
 
 Un messaggio facoltativo si manda solo se l'altro lato ha annunciato la funzione. Chi non manda
 `features` (le versioni 0.1) non ne gestisce nessuna. Le funzioni nuove non cambiano `protocol`.
+
+### Abbinamento: `pair` / `pinRequired` / `paired` (funzione `pairing`, dalla 0.5)
+Se l'`hello` del ricevitore ha `pairing`, il trasmettitore manda subito, prima di `start`:
+```json
+{ "type": "pair", "token": "9f2c…" }
+```
+con il `token` di un abbinamento precedente con quel ricevitore (chiave: l'`id` del suo `hello`), oppure senza
+`token` la prima volta. Il ricevitore risponde:
+```json
+{ "type": "paired", "token": "9f2c…" }
+{ "type": "pinRequired", "wrong": false }
+```
+- `paired`: il trasmettitore è ammesso; tiene `token` per le prossime volte (32 cifre esadecimali casuali).
+- `pinRequired`: il ricevitore mostra un PIN di 6 cifre; il trasmettitore lo chiede all'utente e lo manda con
+  `{ "type": "pair", "pin": "482913" }`. Se è sbagliato arriva un altro `pinRequired` con `wrong: true`; al terzo
+  sbagliato, o se sul ricevitore si preme «Rifiuta», o dopo 2 minuti, arriva `bye` con `reason: "pairing"`.
+  Un `pinRequired` in risposta a un `token` vuol dire che il ricevitore non lo conosce più: il trasmettitore lo dimentica.
+- Il ricevitore tiene per ogni trasmettitore (chiave: l'`id` del suo `hello`) solo lo SHA-256 del token.
+  Un PIN vale solo per il trasmettitore a cui è stato mostrato, e uno alla volta.
+- Chi rinuncia a scrivere il PIN chiude con `bye` `user`.
+
+Il ricevitore Android chiede l'abbinamento salvo che l'utente lo spenga («Chiedi un PIN ai PC nuovi: No»).
+Token e PIN viaggiano in chiaro come il resto: proteggono da chi si collega per sbaglio o per dispetto, non da chi
+legge il traffico della rete.
 
 ### `start` — trasmettitore → ricevitore
 ```json
@@ -181,6 +215,22 @@ Gesti del ricevitore Android: un dito muove; un tocco è un clic; un tocco con d
 dita che scorrono sono la rotellina; doppio tocco tenendo giù il secondo trascina. Il tocco del secondo dito vale anche
 se il primo era appoggiato da prima o stava muovendo il puntatore.
 
+### `key` — ricevitore → trasmettitore (funzione `keyboard`, dalla 0.5)
+```json
+{ "type": "key", "text": "ciao è" }
+{ "type": "key", "key": "backspace" }
+{ "type": "key", "key": "c", "modifiers": ["ctrl"] }
+```
+La tastiera del ricevitore sul PC, nella finestra che ha il fuoco.
+- `text`: da scrivere così com'è (qualsiasi carattere, anche accenti ed emoji); `\n` è Invio, `\t` è Tab.
+- `key`: un tasto premuto e rilasciato: `enter`, `backspace`, `delete`, `tab`, `escape`, `space`, `left`, `right`,
+  `up`, `down`, `home`, `end`, `pageUp`, `pageDown`, `win`, oppure una lettera o una cifra (in minuscolo) o un altro
+  carattere singolo, per le scorciatoie. `modifiers` (facoltativo): `ctrl`, `alt`, `shift`, `win`, tenuti premuti intorno al tasto.
+- Un tasto sconosciuto si ignora. Come `touch` e `mouse`, vale solo se in `settings` `touch` non è `false`.
+
+Il ricevitore Android manda le parole della tastiera sullo schermo man mano: quando la tastiera corregge una parola,
+manda tanti `backspace` quanti i caratteri cambiati e poi il resto nuovo.
+
 ### `audioStart` / `audioStop` — trasmettitore → ricevitore (funzione `audio`, dalla 0.4)
 ```json
 { "type": "audioStart", "codec": "opus", "sampleRate": 48000, "channels": 2, "frameMs": 10 }
@@ -213,7 +263,9 @@ USB che le app vedono come gli altri (USB/IP in locale con usbip-win2, vedi READ
 ```json
 { "type": "bye", "reason": "user" }
 ```
-Chi lo manda chiude subito dopo. `reason`: `user`, `replaced`, `protocol`, `error`.
+Chi lo manda chiude subito dopo. `reason`: `user`, `replaced`, `protocol`, `error`; dalla 0.5 anche `away` (il
+ricevitore è passato in secondo piano o ha spento lo schermo: tornerà ad ascoltare, il trasmettitore può riprovare),
+`pairing` (abbinamento fallito o rifiutato) e `update` (l'altro lato è troppo vecchio, per esempio senza `pairing`).
 
 ## Pacchetti video e audio (binario)
 
@@ -230,5 +282,9 @@ Un messaggio WebSocket binario = un fotogramma compresso o un pezzo di audio:
   agganciarsi a qualsiasi IDR.
 - Niente B-frame: i fotogrammi arrivano già nell'ordine in cui vanno mostrati.
 - Se la rete rallenta, il trasmettitore scarta fotogrammi fino al prossimo IDR invece di accumulare ritardo.
+- Dalla 0.5 il trasmettitore Windows abbassa anche il bitrate (di un terzo, al più ogni 2 s, mai sotto un quinto della
+  scelta né sotto 1,5 Mbit/s) quando la coda si riempie o i `ping` tornano molto più lenti del loro meglio, e lo
+  riporta su un decimo alla volta dopo 5 s buoni, fino a quello scelto. Il ricevitore non deve fare niente: `settings`
+  continua a dire il bitrate scelto.
 - L'audio passa prima del video. Un ricevitore che non conosce un tipo ignora il pacchetto.
 - Il ricevitore suona l'audio appena arriva, con una piccola riserva: se ne accumula troppo (oltre ~150 ms) scarta il vecchio, come il video.

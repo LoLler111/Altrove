@@ -20,6 +20,10 @@ public sealed class AppSettings
     public int ExtendScale { get; set; }
     public bool SendAudio { get; set; } = true;
     public bool UseTabletMic { get; set; }
+    /// <summary>The bitrate follows the network, up to the chosen one.</summary>
+    public bool AdaptiveBitrate { get; set; } = true;
+    /// <summary>Receiver id → the token it gave when paired with its PIN.</summary>
+    public Dictionary<string, string> PairingTokens { get; set; } = [];
 
     private static readonly JsonSerializerOptions Options = new() { WriteIndented = true };
 

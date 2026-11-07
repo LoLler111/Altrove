@@ -230,6 +230,18 @@ public sealed class ScreenVideoSource : IEncodedVideoSource
         }
     }
 
+    public void SetBitrate(int kbps)
+    {
+        lock (_frameLock)
+        {
+            if (_disposed || _settings is null)
+                return;
+            // A rebuilt pipeline (recovery) starts at the rate in use, not the one the stream began with.
+            _settings = _settings with { BitrateKbps = kbps };
+            _encoder?.SetBitrate(kbps);
+        }
+    }
+
     public ValueTask DisposeAsync()
     {
         lock (_lock)

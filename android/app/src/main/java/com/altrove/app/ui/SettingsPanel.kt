@@ -56,6 +56,7 @@ fun SettingsPanel(
     receiver: ReceiverController,
     state: ReceiverState.Streaming,
     firstFocus: FocusRequester,
+    onKeyboard: () -> Unit,
     onClose: () -> Unit,
 ) {
     val settings by receiver.settings.collectAsState()
@@ -192,6 +193,12 @@ fun SettingsPanel(
             )
         } else {
             Note("Il PC non accetta tocco né trackpad: si attiva in Altrove sul PC, prima di trasmettere.")
+        }
+        if (Features.KEYBOARD in features) {
+            OutlinedButton(onClick = onKeyboard, enabled = settings?.touch != false, modifier = Modifier.fillMaxWidth()) {
+                Text("Scrivi sul PC con la tastiera")
+            }
+            Note("Scrive nella finestra attiva del PC. La barra sopra la tastiera ha Esc, Tab, Ctrl, Alt, Win e le frecce.")
         }
 
         Spacer(Modifier.height(12.dp))

@@ -24,4 +24,7 @@ public interface IEncodedVideoSource : IAsyncDisposable
 
     /// <summary>Asks for the next frame to be an IDR, re-encoding the last image if the screen is still.</summary>
     void RequestKeyframe();
+
+    /// <summary>Changes the mean bitrate while encoding (adaptive bitrate); ignored by encoders that cannot.</summary>
+    void SetBitrate(int kbps);
 }

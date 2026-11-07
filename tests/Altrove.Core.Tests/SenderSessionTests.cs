@@ -112,6 +112,122 @@ public class SenderSessionTests
         Assert.Contains("altro dispositivo", await closed.Task.WaitAsync(TimeSpan.FromSeconds(5)));
     }
 
+    [Fact]
+    public async Task A_bye_for_going_away_lets_the_sender_reconnect_and_a_user_bye_does_not()
+    {
+        foreach (var (reason, retry) in new[] { (ByeReasons.Away, true), (ByeReasons.User, false), (ByeReasons.Replaced, false) })
+        {
+            await using var receiver = await FakeReceiver.StartAsync();
+            await using var session = await SenderSession.ConnectAsync(receiver.Uri, Sender, CancellationToken.None);
+            var closed = new TaskCompletionSource<string>();
+            session.Closed += why => closed.TrySetResult(why);
+            await session.StartAsync(new FakeSource(), new EncoderSettings(1280, 720, 30, 4000), StreamModes.Mirror, CancellationToken.None);
+            await receiver.SendAsync(new ByeMessage(reason));
+            await closed.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.Equal(retry, session.CanReconnect);
+        }
+    }
+
+    [Fact]
+    public async Task A_receiver_that_stops_answering_pings_counts_as_lost()
+    {
+        var limit = SenderSession.SilenceLimit;
+        SenderSession.SilenceLimit = TimeSpan.FromSeconds(2);
+        try
+        {
+            await using var receiver = await FakeReceiver.StartAsync();
+            receiver.AnswersPings = false;
+            await using var session = await SenderSession.ConnectAsync(receiver.Uri, Sender, CancellationToken.None);
+            var closed = new TaskCompletionSource<string>();
+            session.Closed += why => closed.TrySetResult(why);
+            await session.StartAsync(new FakeSource(), new EncoderSettings(1280, 720, 30, 4000), StreamModes.Mirror, CancellationToken.None);
+            Assert.Equal("Il ricevitore non risponde più.", await closed.Task.WaitAsync(TimeSpan.FromSeconds(10)));
+            Assert.True(session.CanReconnect);
+        }
+        finally
+        {
+            SenderSession.SilenceLimit = limit;
+        }
+    }
+
+    [Fact]
+    public async Task Pairing_with_a_known_token_needs_no_pin()
+    {
+        await using var receiver = await FakeReceiver.StartAsync(pin: "123456", knownToken: "saved");
+        var pairing = new FakePairing { Tokens = { ["tab"] = "saved" } };
+        await using var session = await SenderSession.ConnectAsync(receiver.Uri, Sender, pairing, CancellationToken.None);
+        Assert.IsType<HelloMessage>(await receiver.NextControlAsync());
+        Assert.Equal("saved", Assert.IsType<PairMessage>(await receiver.NextControlAsync()).Token);
+        Assert.Empty(pairing.Asked);
+        Assert.Equal("saved", pairing.Tokens["tab"]);
+    }
+
+    [Fact]
+    public async Task Pairing_asks_the_pin_again_when_wrong_and_keeps_the_new_token()
+    {
+        await using var receiver = await FakeReceiver.StartAsync(pin: "123456");
+        // An old token the receiver forgot: dropped, then a wrong PIN, then the right one.
+        var pairing = new FakePairing { Tokens = { ["tab"] = "forgotten" }, Pins = new(["111111", " 123456 "]) };
+        await using var session = await SenderSession.ConnectAsync(receiver.Uri, Sender, pairing, CancellationToken.None);
+        Assert.Equal([("Tab A", false), ("Tab A", true)], pairing.Asked);
+        Assert.Equal("new-token", pairing.Tokens["tab"]);
+        Assert.IsType<HelloMessage>(await receiver.NextControlAsync());
+        Assert.Equal("forgotten", Assert.IsType<PairMessage>(await receiver.NextControlAsync()).Token);
+        Assert.Equal("111111", Assert.IsType<PairMessage>(await receiver.NextControlAsync()).Pin);
+        Assert.Equal("123456", Assert.IsType<PairMessage>(await receiver.NextControlAsync()).Pin);
+    }
+
+    [Fact]
+    public async Task Giving_up_on_the_pin_cancels_and_says_goodbye()
+    {
+        await using var receiver = await FakeReceiver.StartAsync(pin: "123456");
+        var pairing = new FakePairing();
+        await Assert.ThrowsAsync<PairingCancelledException>(() => SenderSession.ConnectAsync(receiver.Uri, Sender, pairing, CancellationToken.None));
+        Assert.IsType<HelloMessage>(await receiver.NextControlAsync());
+        Assert.IsType<PairMessage>(await receiver.NextControlAsync());
+        Assert.Equal(ByeReasons.User, Assert.IsType<ByeMessage>(await receiver.NextControlAsync()).Reason);
+    }
+
+    [Fact]
+    public async Task Without_a_pairing_handler_a_receiver_that_wants_one_is_refused()
+    {
+        await using var receiver = await FakeReceiver.StartAsync(pin: "123456");
+        var error = await Assert.ThrowsAsync<IOException>(() => SenderSession.ConnectAsync(receiver.Uri, Sender, CancellationToken.None));
+        Assert.Contains("PIN", error.Message);
+    }
+
+    [Fact]
+    public async Task Keys_reach_the_sender_and_the_encoder_starts_at_the_chosen_rate()
+    {
+        await using var receiver = await FakeReceiver.StartAsync();
+        await using var session = await SenderSession.ConnectAsync(receiver.Uri, Sender, CancellationToken.None);
+        session.AdaptBitrate = true;
+        var keys = new System.Collections.Concurrent.ConcurrentQueue<KeyMessage>();
+        session.KeyReceived += keys.Enqueue;
+        var source = new FakeSource();
+        await session.StartAsync(source, new EncoderSettings(1280, 720, 30, 9000), StreamModes.Mirror, CancellationToken.None);
+        Assert.Equal(9000, source.StartKbps);
+        await receiver.SendAsync(new KeyMessage(Key: "v", Modifiers: [KeyModifiers.Ctrl]));
+        await WaitUntil(() => !keys.IsEmpty);
+        Assert.Equal("v", keys.Single().Key);
+    }
+
+    private sealed class FakePairing : IPairingHandler
+    {
+        public Dictionary<string, string> Tokens { get; } = [];
+        public Queue<string> Pins { get; init; } = new();
+        public List<(string Name, bool Wrong)> Asked { get; } = [];
+        public string? TokenFor(string receiverId) => Tokens.GetValueOrDefault(receiverId);
+        public void Remember(string receiverId, string token) => Tokens[receiverId] = token;
+        public void Forget(string receiverId) => Tokens.Remove(receiverId);
+
+        public Task<string?> AskPinAsync(string receiverName, bool wrong, CancellationToken token)
+        {
+            Asked.Add((receiverName, wrong));
+            return Task.FromResult(Pins.Count > 0 ? Pins.Dequeue() : null);
+        }
+    }
+
     private static EncodedFrame Idr(long pts) => new(new byte[] { 0, 0, 0, 1, 0x67, 1, 0, 0, 0, 1, 0x68, 2, 0, 0, 0, 1, 0x65, 3 }, pts, true);
 
     private static EncodedFrame Delta(long pts) => new(new byte[] { 0, 0, 0, 1, 0x41, 9 }, pts, false);
@@ -130,8 +246,14 @@ public class SenderSessionTests
         public string EncoderName => "fake";
         public event Action<EncodedFrame>? FrameEncoded;
         public event Action<Exception>? Failed;
-        public Task StartAsync(EncoderSettings settings, CancellationToken token) => Task.CompletedTask;
+        public Task StartAsync(EncoderSettings settings, CancellationToken token)
+        {
+            StartKbps = settings.BitrateKbps;
+            return Task.CompletedTask;
+        }
         public void RequestKeyframe() => Interlocked.Increment(ref KeyframeRequests);
+        public int StartKbps, BitrateKbps;
+        public void SetBitrate(int kbps) => BitrateKbps = kbps;
         public void Emit(EncodedFrame frame) => FrameEncoded?.Invoke(frame);
         public ValueTask DisposeAsync()
         {
@@ -156,24 +278,30 @@ public class SenderSessionTests
 
         public Uri Uri { get; }
 
-        public static Task<FakeReceiver> StartAsync(int protocol = AltroveProtocol.Version)
+        /// <summary>With <paramref name="pin"/> it wants pairing: <paramref name="knownToken"/> opens at once, the PIN gives "new-token".</summary>
+        public static Task<FakeReceiver> StartAsync(int protocol = AltroveProtocol.Version, string? pin = null, string? knownToken = null)
         {
             var port = FreePort();
             var listener = new HttpListener();
             listener.Prefixes.Add($"http://localhost:{port}/");
             listener.Start();
             var receiver = new FakeReceiver(listener, port);
-            _ = Task.Run(() => receiver.AcceptAsync(protocol));
+            _ = Task.Run(() => receiver.AcceptAsync(protocol, pin, knownToken));
             return Task.FromResult(receiver);
         }
 
-        private async Task AcceptAsync(int protocol)
+        public bool AnswersPings { get; set; } = true;
+
+        private async Task AcceptAsync(int protocol, string? pin, string? knownToken)
         {
             var context = await _listener.GetContextAsync();
             var ws = (await context.AcceptWebSocketAsync(null)).WebSocket;
             _socket.SetResult(ws);
-            var hello = new HelloMessage(protocol, Roles.Receiver, "tab", "Tab A", "0.1.0", new DisplayInfo(1920, 1200, 60), ["h264"], 1920, 1080);
+            var hello = new HelloMessage(protocol, Roles.Receiver, "tab", "Tab A", "0.1.0", new DisplayInfo(1920, 1200, 60), ["h264"], 1920, 1080,
+                pin is null ? null : [Features.Pairing]);
             await ws.SendAsync(Encoding.UTF8.GetBytes(hello.ToJson()), WebSocketMessageType.Text, true, CancellationToken.None);
+            async Task Reply(ControlMessage message) =>
+                await ws.SendAsync(Encoding.UTF8.GetBytes(message.ToJson()), WebSocketMessageType.Text, true, CancellationToken.None);
             var buffer = new byte[64 * 1024];
             try
             {
@@ -188,6 +316,23 @@ public class SenderSessionTests
                     } while (!result.EndOfMessage);
                     if (result.MessageType == WebSocketMessageType.Close)
                         break;
+                    if (result.MessageType == WebSocketMessageType.Text)
+                    {
+                        switch (ControlMessage.Parse(Encoding.UTF8.GetString(message.ToArray())))
+                        {
+                            case PairMessage pair when pin is not null:
+                                if (pair.Token is not null && pair.Token == knownToken)
+                                    await Reply(new PairedMessage(knownToken));
+                                else if (pair.Pin == pin)
+                                    await Reply(new PairedMessage("new-token"));
+                                else
+                                    await Reply(new PinRequiredMessage(Wrong: pair.Pin is not null));
+                                break;
+                            case PingMessage ping when AnswersPings:
+                                await Reply(new PongMessage(ping.T));
+                                break;
+                        }
+                    }
                     await _messages.Writer.WriteAsync((result.MessageType, message.ToArray()));
                 }
             }

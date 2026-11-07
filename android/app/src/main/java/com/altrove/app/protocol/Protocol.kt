@@ -88,7 +88,74 @@ object Features {
 
     /** The sender takes this device's microphone and makes it a Windows microphone. */
     const val MIC = "mic"
+
+    /** This receiver: a sender must pair (pair → paired) first. A sender: it knows how to. */
+    const val PAIRING = "pairing"
+
+    /** The sender accepts [Key] messages: this device types on the PC. */
+    const val KEYBOARD = "keyboard"
 }
+
+object ByeReasons {
+    const val USER = "user"
+    const val REPLACED = "replaced"
+    const val PROTOCOL = "protocol"
+    const val ERROR = "error"
+
+    /** This app went to the background or the screen turned off: the PC may connect again when it is back. */
+    const val AWAY = "away"
+
+    /** Pairing failed or was refused here. */
+    const val PAIRING = "pairing"
+
+    /** The sender is too old for pairing. */
+    const val UPDATE = "update"
+}
+
+/** Sender → receiver after the hellos: the token of an earlier pairing, or the PIN shown here. */
+@Serializable
+@SerialName("pair")
+data class PairRequest(val token: String? = null, val pin: String? = null) : ControlMessage()
+
+/** Receiver → sender: a PIN is on this screen for the user to type on the PC; [wrong] after a wrong one. */
+@Serializable
+@SerialName("pinRequired")
+data class PinRequired(val wrong: Boolean = false) : ControlMessage()
+
+/** Receiver → sender: paired; the PC keeps [token] to connect next time without a PIN. */
+@Serializable
+@SerialName("paired")
+data class Paired(val token: String) : ControlMessage()
+
+object KeyNames {
+    const val ENTER = "enter"
+    const val BACKSPACE = "backspace"
+    const val DELETE = "delete"
+    const val TAB = "tab"
+    const val ESCAPE = "escape"
+    const val SPACE = "space"
+    const val LEFT = "left"
+    const val RIGHT = "right"
+    const val UP = "up"
+    const val DOWN = "down"
+    const val HOME = "home"
+    const val END = "end"
+    const val PAGE_UP = "pageUp"
+    const val PAGE_DOWN = "pageDown"
+    const val WIN = "win"
+}
+
+object KeyModifiers {
+    const val CTRL = "ctrl"
+    const val ALT = "alt"
+    const val SHIFT = "shift"
+    const val WIN = "win"
+}
+
+/** This device's keyboard on the PC: [text] typed as it is, or one [key] (a [KeyNames] name, a letter or a digit) with [modifiers] held. */
+@Serializable
+@SerialName("key")
+data class Key(val text: String? = null, val key: String? = null, val modifiers: List<String>? = null) : ControlMessage()
 
 object TouchStates {
     const val DOWN = "down"
@@ -203,7 +270,7 @@ object MouseButtons {
 data class Mouse(val action: String, val dx: Double? = null, val dy: Double? = null, val button: String? = null) : ControlMessage()
 
 object Messages {
-    private val known = setOf("hello", "start", "stop", "keyframe", "ping", "pong", "stats", "bye", "settings", "configure", "touch", "mouse", "audioStart", "audioStop", "micStart", "micStop")
+    private val known = setOf("hello", "start", "stop", "keyframe", "ping", "pong", "stats", "bye", "settings", "configure", "touch", "mouse", "audioStart", "audioStop", "micStart", "micStop", "pair", "pinRequired", "paired", "key")
 
     val json = Json {
         classDiscriminator = "type"

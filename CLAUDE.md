@@ -27,6 +27,17 @@ Testi per l'utente in italiano, commenti e nomi nel codice in inglese (come in S
   tocco sintetico di Windows, ripete da sé la posizione di un dito fermo) e `configure` (il ricevitore cambia le
   impostazioni: `MainViewModel.ConfigureAsync` → `StartStreamAsync` → `SenderSession.SwitchSourceAsync`, stessa connessione).
 - `ScreenVideoSource`: il fotogramma in conversione e lo smontaggio sono esclusivi (`_frameLock`).
+- Bitrate adattivo: `Core/Streaming/AdaptiveBitrate` (logica pura, testata) decide ogni secondo nel ciclo dei ping di
+  `SenderSession` (coda piena o RTT molto sopra il minimo → giù di un terzo; 5 s buoni → su); `H264Encoder.SetBitrate`
+  lo applica con ICodecAPI sul thread dell'encoder prima del fotogramma successivo. Sul fisso va ancora verificato che
+  AMF accetti il cambio al volo (`altrove-cli send … --adaptive` stampa i kbit/s dell'encoder).
+- Riconnessione: `SenderSession.CanReconnect` (rete persa, 8 s senza risposte, `bye` `away` quando l'APK va in
+  secondo piano) → `MainViewModel.ReconnectAsync` riprova per 2 minuti, stato `Reconnecting`, monitor virtuale tenuto.
+- Abbinamento con PIN: il ricevitore annuncia `pairing`; `ReceiverServer` tiene le connessioni nuove in attesa finché
+  `ReceiverController` non le ammette (`admit`), quindi un estraneo non scalza più il PC che trasmette. Logica in
+  `receiver/Pairing.kt` (solo l'hash dei token), sul PC `IPairingHandler` (`PcPairing`, token in settings.json, `PinWindow`).
+- Tastiera: `ui/RemoteKeyboard.kt` (campo invisibile + barra con Esc/Tab/Ctrl/Alt/Win/frecce), traduzione in
+  `receiver/KeyboardMapper.kt`; sul PC `Core/Input/KeyStrokes` (testato) → `Capture/Input/KeyboardInjector` (SendInput, testo Unicode).
 - Risoluzioni: `Core/Video/ResolutionPlanner` (Duplica: lo schermo rimpicciolito, mai ingrandito; Estendi: forma del
   ricevitore, anche più grande). Ogni scelta ha come chiave l'altezza risultante. Il ricevitore riporta in `maxWidth`/`maxHeight`
   il limite del decoder, non del proprio schermo. Trackpad: gesti in `receiver/TrackpadGestures.kt`, puntatore in

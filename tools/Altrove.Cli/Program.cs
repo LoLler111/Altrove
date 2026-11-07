@@ -3,6 +3,7 @@ using System.Net;
 using System.Net.WebSockets;
 using System.Runtime.InteropServices;
 using System.Text;
+using System.Text.Json;
 using Altrove.Capture;
 using Altrove.Core.Discovery;
 using Altrove.Core.Protocol;
@@ -17,6 +18,7 @@ using Altrove.Core.Streaming;
 // Options: --seconds N  --fps N  --height N  --kbps N  --software  --monitor N  --out file.h264
 //          --simulate-failure N  (the next N encoders break after 30 frames: tries the recovery)
 //          --simulate-stall N    (the same, but they go silent instead of failing)
+//          send: --pin 123456 (the PIN the receiver shows the first time)  --adaptive (bitrate follows the network)
 
 SetProcessDpiAwarenessContext(-4); // per-monitor v2: real pixel sizes
 Console.OutputEncoding = Encoding.UTF8;
@@ -484,15 +486,19 @@ static async Task<int> Send(Options options)
         return 2;
     }
     var monitor = PickMonitor(options);
-    var self = new HelloMessage(AltroveProtocol.Version, Roles.Sender, MachineId(), Environment.MachineName, "cli");
-    await using var session = await SenderSession.ConnectAsync(ReceiverAddress.ToUri(host, port), self, CancellationToken.None);
+    var self = new HelloMessage(AltroveProtocol.Version, Roles.Sender, MachineId(), Environment.MachineName, "cli",
+        Features: [Features.Pairing, Features.Keyboard]);
+    await using var session = await SenderSession.ConnectAsync(ReceiverAddress.ToUri(host, port), self, new CliPairing(options.Pin), CancellationToken.None);
+    session.AdaptBitrate = options.Adaptive;
+    // Keys are only printed: the CLI never types on this PC.
+    session.KeyReceived += key => Console.WriteLine($"  tasto: {key.ToJson()}");
     Console.WriteLine($"Collegato a {session.Receiver.Name} (schermo {session.Receiver.Display?.Width}×{session.Receiver.Display?.Height})");
     var (width, height) = session.PlanSize(monitor.Width, monitor.Height, options.Height);
     var settings = new EncoderSettings(width, height, options.Fps, options.Kbps);
     var closed = new TaskCompletionSource<string>();
     session.Closed += why => closed.TrySetResult(why);
     session.StatsUpdated += s => Console.WriteLine(
-        $"  {s.SentFps:0.0} fps inviati, {s.Mbps:0.0} Mbit/s, RTT {s.RoundTripMs?.ToString("0") ?? "-"} ms, ricevitore {s.ReceiverFps?.ToString("0.0") ?? "-"} fps, scartati {s.DroppedFrames}");
+        $"  {s.SentFps:0.0} fps inviati, {s.Mbps:0.0} Mbit/s, RTT {s.RoundTripMs?.ToString("0") ?? "-"} ms, ricevitore {s.ReceiverFps?.ToString("0.0") ?? "-"} fps, scartati {s.DroppedFrames}, encoder a {s.TargetKbps} kbit/s");
 
     H264Encoder.SimulateFailures(options.SimulateFailures, options.SimulateStall);
     await using var source = new ScreenVideoSource(monitor, options.Software);
@@ -605,15 +611,16 @@ static string MachineId() => Convert.ToHexString(System.Security.Cryptography.SH
 static extern bool SetProcessDpiAwarenessContext(nint value);
 
 internal sealed record Options(int Seconds, int Fps, int Height, int Kbps, bool Software, int Monitor, string Out, int Port, string? Positional,
-    string? Display = null, int SimulateFailures = 0, bool SimulateStall = false)
+    string? Display = null, int SimulateFailures = 0, bool SimulateStall = false, string? Pin = null, bool Adaptive = false)
 {
     public static Options Parse(string[] args)
     {
         int seconds = 5, fps = 60, height = 1080, kbps = 10_000, monitor = 1, port = AltroveProtocol.DefaultPort, simulate = 0;
         var stall = false;
         var software = false;
+        var adaptive = false;
         var output = "altrove-test.h264";
-        string? positional = null, display = null;
+        string? positional = null, display = null, pin = null;
         for (var i = 0; i < args.Length; i++)
         {
             string Next() => i + 1 < args.Length ? args[++i] : throw new ArgumentException($"{args[i]} vuole un valore");
@@ -630,10 +637,73 @@ internal sealed record Options(int Seconds, int Fps, int Height, int Kbps, bool 
                 case "--display": display = Next(); break;
                 case "--simulate-failure": simulate = int.Parse(Next()); break;
                 case "--simulate-stall": simulate = int.Parse(Next()); stall = true; break;
+                case "--pin": pin = Next(); break;
+                case "--adaptive": adaptive = true; break;
                 default: positional = args[i]; break;
             }
         }
-        return new Options(seconds, fps, height, kbps, software, monitor, output, port, positional, display, simulate, stall);
+        return new Options(seconds, fps, height, kbps, software, monitor, output, port, positional, display, simulate, stall, pin, adaptive);
+    }
+}
+
+/// <summary>
+/// Pairing for altrove-cli: tokens in %LOCALAPPDATA%\Altrove\cli-pairing.json; the PIN from --pin (once), else
+/// typed in the console.
+/// </summary>
+internal sealed class CliPairing(string? pin) : IPairingHandler
+{
+    private static readonly string FilePath =
+        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Altrove", "cli-pairing.json");
+
+    private readonly Dictionary<string, string> _tokens = Load();
+    private string? _pin = pin;
+
+    private static Dictionary<string, string> Load()
+    {
+        try
+        {
+            return File.Exists(FilePath) ? JsonSerializer.Deserialize<Dictionary<string, string>>(File.ReadAllText(FilePath)) ?? [] : [];
+        }
+        catch (Exception ex) when (ex is IOException or JsonException)
+        {
+            return [];
+        }
+    }
+
+    private void Save()
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(FilePath)!);
+        File.WriteAllText(FilePath, JsonSerializer.Serialize(_tokens));
+    }
+
+    public string? TokenFor(string receiverId) => _tokens.GetValueOrDefault(receiverId);
+
+    public void Remember(string receiverId, string token)
+    {
+        _tokens[receiverId] = token;
+        Save();
+        Console.WriteLine("Abbinato: le prossime volte niente PIN.");
+    }
+
+    public void Forget(string receiverId)
+    {
+        _tokens.Remove(receiverId);
+        Save();
+    }
+
+    public Task<string?> AskPinAsync(string receiverName, bool wrong, CancellationToken token)
+    {
+        if (wrong)
+            Console.WriteLine("PIN sbagliato.");
+        var given = _pin;
+        _pin = null;
+        if (given is not null)
+        {
+            Console.WriteLine($"{receiverName} chiede il PIN: uso quello di --pin.");
+            return Task.FromResult<string?>(given);
+        }
+        Console.Write($"{receiverName} mostra un PIN: scrivilo qui e premi Invio: ");
+        return Task.FromResult(Console.ReadLine());
     }
 }
 

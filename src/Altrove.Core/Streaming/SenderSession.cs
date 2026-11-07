@@ -7,13 +7,34 @@ using Altrove.Core.Video;
 
 namespace Altrove.Core.Streaming;
 
+/// <param name="TargetKbps">The bitrate asked of the encoder now (the adaptive bitrate may keep it under the user's choice).</param>
+/// <param name="CeilingKbps">The user's choice of bitrate.</param>
 public sealed record SenderStats(
     double SentFps,
     double Mbps,
     double? RoundTripMs,
     double? ReceiverFps,
     int DroppedFrames,
-    int QueuedFrames);
+    int QueuedFrames,
+    int TargetKbps = 0,
+    int CeilingKbps = 0);
+
+/// <summary>What the sender keeps and asks for when a receiver wants to be paired (feature <see cref="Features.Pairing"/>).</summary>
+public interface IPairingHandler
+{
+    /// <summary>The token of an earlier pairing with this receiver, if any.</summary>
+    string? TokenFor(string receiverId);
+
+    void Remember(string receiverId, string token);
+
+    void Forget(string receiverId);
+
+    /// <summary>The receiver shows a PIN: ask the user for it. Null when the user gives up.</summary>
+    Task<string?> AskPinAsync(string receiverName, bool wrong, CancellationToken token);
+}
+
+/// <summary>The user gave up typing the PIN the receiver showed.</summary>
+public sealed class PairingCancelledException() : OperationCanceledException("Abbinamento annullato.");
 
 /// <summary>
 /// The sender's side of one connection to a receiver: handshake, then video packets with control
@@ -48,6 +69,15 @@ public sealed class SenderSession : IAsyncDisposable
     private long _bytesSent;
     private long _statsStart;
     private double? _roundTripMs, _receiverFps;
+    private int _overflows;
+
+    // Adaptive bitrate: the encoder's rate follows what the network carries, up to the user's choice.
+    private volatile AdaptiveBitrate? _adaptive;
+    private int _ceilingKbps;
+
+    /// <summary>Without a word from the receiver for this long (it answers a ping every second), the connection is lost.</summary>
+    internal static TimeSpan SilenceLimit = TimeSpan.FromSeconds(8);
+    private long _lastHeardMs;
 
     private SenderSession(ClientWebSocket socket, HelloMessage receiver)
     {
@@ -57,20 +87,54 @@ public sealed class SenderSession : IAsyncDisposable
 
     public HelloMessage Receiver { get; }
 
+    /// <summary>The bitrate goes down when the network falls behind and back up to the chosen one when it keeps up.</summary>
+    public bool AdaptBitrate
+    {
+        get => Volatile.Read(ref _adaptBitrate);
+        set
+        {
+            Volatile.Write(ref _adaptBitrate, value);
+            // Off: straight back to the chosen rate.
+            if (!value && _adaptive is { } adaptive && adaptive.CurrentKbps != _ceilingKbps)
+            {
+                _adaptive = new AdaptiveBitrate(_ceilingKbps);
+                _source?.SetBitrate(_ceilingKbps);
+            }
+        }
+    }
+
+    private bool _adaptBitrate;
+
+    /// <summary>
+    /// Set when <see cref="Closed"/> is raised: true if the receiver may come back by itself (the network dropped,
+    /// the receiver went silent or to the background), so connecting again is worth a try.
+    /// </summary>
+    public bool CanReconnect { get; private set; }
+
+    /// <summary>Raised on a network thread for every key message (only if the hello announced <see cref="Features.Keyboard"/>).</summary>
+    public event Action<KeyMessage>? KeyReceived;
+
     /// <summary>Raised about once a second while streaming.</summary>
     public event Action<SenderStats>? StatsUpdated;
 
     /// <summary>Raised once when the connection ends; the text says why, in Italian, for the user.</summary>
     public event Action<string>? Closed;
 
-    public static async Task<SenderSession> ConnectAsync(Uri receiver, HelloMessage self, CancellationToken token)
+    public static Task<SenderSession> ConnectAsync(Uri receiver, HelloMessage self, CancellationToken token) =>
+        ConnectAsync(receiver, self, null, token);
+
+    /// <summary>
+    /// Opens the connection and exchanges the hellos; then, if the receiver wants it, pairs with the token
+    /// <paramref name="pairing"/> remembers or with the PIN it asks the user for.
+    /// </summary>
+    public static async Task<SenderSession> ConnectAsync(Uri receiver, HelloMessage self, IPairingHandler? pairing, CancellationToken token)
     {
         var socket = new ClientWebSocket();
         socket.Options.KeepAliveInterval = TimeSpan.FromSeconds(5);
         try
         {
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(token);
-            timeout.CancelAfter(TimeSpan.FromSeconds(8));
+            timeout.CancelAfter(ConnectTimeout);
             await socket.ConnectAsync(receiver, timeout.Token);
             await SendTextAsync(socket, self.ToJson(), timeout.Token);
             HelloMessage? hello = null;
@@ -92,12 +156,67 @@ public sealed class SenderSession : IAsyncDisposable
                 await SendTextAsync(socket, new ByeMessage(ByeReasons.Protocol).ToJson(), timeout.Token);
                 throw new IOException($"Il ricevitore usa il protocollo {hello.Protocol}, questa app il {AltroveProtocol.Version}: aggiorna l'app più vecchia.");
             }
+            if (hello.Supports(Features.Pairing))
+            {
+                if (pairing is null)
+                {
+                    await SendTextAsync(socket, new ByeMessage(ByeReasons.Pairing).ToJson(), timeout.Token);
+                    throw new IOException($"{hello.Name} chiede un PIN per collegarsi: usa Altrove sul PC.");
+                }
+                await PairAsync(socket, hello, pairing, timeout, token);
+            }
             return new SenderSession(socket, hello);
         }
         catch
         {
             socket.Dispose();
             throw;
+        }
+    }
+
+    private static readonly TimeSpan ConnectTimeout = TimeSpan.FromSeconds(8);
+
+    /// <summary>pair → paired, with a PIN typed by the user when the receiver does not know (or no longer knows) the token.</summary>
+    private static async Task PairAsync(ClientWebSocket socket, HelloMessage receiver, IPairingHandler pairing,
+        CancellationTokenSource timeout, CancellationToken userToken)
+    {
+        var saved = pairing.TokenFor(receiver.Id);
+        await SendTextAsync(socket, new PairMessage(Token: saved).ToJson(), timeout.Token);
+        while (true)
+        {
+            var text = await ReceiveTextAsync(socket, timeout.Token)
+                ?? throw new IOException($"{receiver.Name} ha chiuso la connessione durante l'abbinamento.");
+            switch (ControlMessage.Parse(text))
+            {
+                case PairedMessage paired:
+                    pairing.Remember(receiver.Id, paired.Token);
+                    return;
+                case PinRequiredMessage request:
+                    if (saved is not null)
+                    {
+                        // The receiver forgot this PC (its data was cleared, or the user removed it).
+                        pairing.Forget(receiver.Id);
+                        saved = null;
+                    }
+                    // The user takes the time they need; the receiver has its own limit.
+                    timeout.CancelAfter(Timeout.InfiniteTimeSpan);
+                    var pin = await pairing.AskPinAsync(receiver.Name, request.Wrong, userToken);
+                    if (string.IsNullOrWhiteSpace(pin))
+                    {
+                        await SendTextAsync(socket, new ByeMessage(ByeReasons.User).ToJson(), CancellationToken.None);
+                        throw new PairingCancelledException();
+                    }
+                    timeout.CancelAfter(ConnectTimeout);
+                    await SendTextAsync(socket, new PairMessage(Pin: pin.Trim()).ToJson(), timeout.Token);
+                    break;
+                case PingMessage ping:
+                    await SendTextAsync(socket, new PongMessage(ping.T).ToJson(), timeout.Token);
+                    break;
+                case ByeMessage bye:
+                    throw new IOException(bye.Reason == ByeReasons.Pairing
+                        ? $"{receiver.Name} ha rifiutato il collegamento (PIN sbagliato o rifiutato sul ricevitore)."
+                        : $"{receiver.Name} ha chiuso la connessione durante l'abbinamento ({bye.Reason}).");
+            }
         }
     }
 
@@ -143,6 +262,7 @@ public sealed class SenderSession : IAsyncDisposable
         if (_sendLoop is not null)
             throw new InvalidOperationException("Already streaming.");
         _statsStart = _clock.ElapsedTicks;
+        _lastHeardMs = _clock.ElapsedMilliseconds;
         _sendLoop = Task.Run(SendLoopAsync);
         _receiveLoop = Task.Run(ReceiveLoopAsync);
         _pingLoop = Task.Run(PingLoopAsync);
@@ -158,11 +278,14 @@ public sealed class SenderSession : IAsyncDisposable
         if (_sendLoop is null)
             throw new InvalidOperationException("Not started.");
         DetachSource();
+        // A new stream on the same network starts where the old one had settled, not at the top.
+        _ceilingKbps = settings.BitrateKbps;
+        _adaptive = new AdaptiveBitrate(settings.BitrateKbps, AdaptBitrate ? _adaptive?.CurrentKbps : null);
         _source = source;
         source.FrameEncoded += OnFrame;
         source.Failed += OnSourceFailed;
         EnqueueControl(new StartMessage("h264", settings.Width, settings.Height, settings.Fps, mode));
-        await source.StartAsync(settings, token);
+        await source.StartAsync(settings with { BitrateKbps = _adaptive.CurrentKbps }, token);
     }
 
     /// <summary>True once <see cref="StartAsync"/> ran: later sources go through <see cref="SwitchSourceAsync"/>.</summary>
@@ -246,6 +369,7 @@ public sealed class SenderSession : IAsyncDisposable
             if (_video.Count >= MaxQueuedFrames && !frame.IsKeyframe)
             {
                 // The network is behind: throw the backlog away and restart from a fresh IDR.
+                _overflows++;
                 _droppedTotal += _video.Count + 1;
                 _video.Clear();
                 _waitingForKeyframe = true;
@@ -317,7 +441,6 @@ public sealed class SenderSession : IAsyncDisposable
                     else
                         break;
                 }
-                ReportStatsIfDue();
             }
         }
         catch (OperationCanceledException)
@@ -325,7 +448,7 @@ public sealed class SenderSession : IAsyncDisposable
         }
         catch (Exception ex) when (ex is WebSocketException or IOException or ObjectDisposedException)
         {
-            _ = CloseAsync("La connessione con il ricevitore si è interrotta.", null);
+            _ = CloseAsync("La connessione con il ricevitore si è interrotta.", null, canReconnect: true);
         }
     }
 
@@ -339,9 +462,11 @@ public sealed class SenderSession : IAsyncDisposable
                 var text = await ReceiveTextAsync(_socket, token, OnBinary);
                 if (text is null)
                 {
-                    _ = CloseAsync("Il ricevitore ha chiuso la connessione.", null);
+                    // Closed without a goodbye: the app was killed, or the network took the connection down.
+                    _ = CloseAsync("Il ricevitore ha chiuso la connessione.", null, canReconnect: true);
                     return;
                 }
+                Volatile.Write(ref _lastHeardMs, _clock.ElapsedMilliseconds);
                 ControlMessage? message;
                 try
                 {
@@ -385,10 +510,18 @@ public sealed class SenderSession : IAsyncDisposable
                     case MicStopMessage:
                         MicStopped?.Invoke();
                         break;
+                    case KeyMessage key:
+                        KeyReceived?.Invoke(key);
+                        break;
                     case ByeMessage bye:
-                        _ = CloseAsync(bye.Reason == ByeReasons.Replaced
-                            ? "Un altro dispositivo ha preso il ricevitore."
-                            : "Il ricevitore ha chiuso la trasmissione.", null);
+                        var (why, retry) = bye.Reason switch
+                        {
+                            ByeReasons.Replaced => ("Un altro dispositivo ha preso il ricevitore.", false),
+                            ByeReasons.Away => ("Il ricevitore è passato in secondo piano o ha spento lo schermo.", true),
+                            ByeReasons.Update => ("Il ricevitore chiede una versione più recente di Altrove sul PC.", false),
+                            _ => ("Il ricevitore ha chiuso la trasmissione.", false),
+                        };
+                        _ = CloseAsync(why, null, retry);
                         return;
                 }
             }
@@ -398,7 +531,7 @@ public sealed class SenderSession : IAsyncDisposable
         }
         catch (Exception ex) when (ex is WebSocketException or IOException or ObjectDisposedException)
         {
-            _ = CloseAsync("La connessione con il ricevitore si è interrotta.", null);
+            _ = CloseAsync("La connessione con il ricevitore si è interrotta.", null, canReconnect: true);
         }
     }
 
@@ -410,6 +543,13 @@ public sealed class SenderSession : IAsyncDisposable
             {
                 EnqueueControl(new PingMessage(_clock.ElapsedMilliseconds));
                 await Task.Delay(1000, _stop.Token);
+                // A Wi-Fi that drops leaves the socket open for minutes: the missing pongs tell first.
+                if (_clock.ElapsedMilliseconds - Volatile.Read(ref _lastHeardMs) > SilenceLimit.TotalMilliseconds)
+                {
+                    _ = CloseAsync("Il ricevitore non risponde più.", null, canReconnect: true);
+                    return;
+                }
+                ReportStatsIfDue();
             }
         }
         catch (OperationCanceledException)
@@ -426,22 +566,33 @@ public sealed class SenderSession : IAsyncDisposable
         _statsStart = now;
         var frames = Interlocked.Exchange(ref _framesSent, 0);
         var bytes = Interlocked.Exchange(ref _bytesSent, 0);
-        int queued, dropped;
+        int queued, dropped, overflows;
         lock (_lock)
         {
             queued = _video.Count;
             dropped = _droppedTotal;
+            overflows = _overflows;
+            _overflows = 0;
         }
-        StatsUpdated?.Invoke(new SenderStats(frames / elapsed, bytes * 8 / elapsed / 1_000_000, _roundTripMs, _receiverFps, dropped, queued));
+        var target = _ceilingKbps;
+        if (AdaptBitrate && _adaptive is { } adaptive && _source is { } source)
+        {
+            if (adaptive.Update(new NetworkSample(_roundTripMs, overflows, queued, frames)))
+                source.SetBitrate(adaptive.CurrentKbps);
+            target = adaptive.CurrentKbps;
+        }
+        StatsUpdated?.Invoke(new SenderStats(frames / elapsed, bytes * 8 / elapsed / 1_000_000, _roundTripMs, _receiverFps, dropped, queued,
+            target, _ceilingKbps));
     }
 
     /// <summary>Ends the session, telling the receiver why if it is still listening.</summary>
     public Task StopAsync() => CloseAsync("Trasmissione fermata.", ByeReasons.User);
 
-    private async Task CloseAsync(string why, string? byeReason)
+    private async Task CloseAsync(string why, string? byeReason, bool canReconnect = false)
     {
         if (Interlocked.Exchange(ref _closed, 1) != 0)
             return;
+        CanReconnect = canReconnect;
         if (_source is not null)
         {
             _source.FrameEncoded -= OnFrame;
@@ -490,7 +641,6 @@ public sealed class SenderSession : IAsyncDisposable
     private static Task SendTextAsync(ClientWebSocket socket, string text, CancellationToken token) =>
         socket.SendAsync(Encoding.UTF8.GetBytes(text), WebSocketMessageType.Text, true, token);
 
-    /// <summary>The next text message; binary messages are skipped (receivers send none in v1). Null when the socket closes.</summary>
     /// <summary>The next text message; binary ones go to <paramref name="onBinary"/> (the receiver's microphone), or are skipped. Null when the socket closes.</summary>
     private static async Task<string?> ReceiveTextAsync(ClientWebSocket socket, CancellationToken token, Action<byte[]>? onBinary = null)
     {

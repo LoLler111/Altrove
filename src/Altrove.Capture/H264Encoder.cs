@@ -117,6 +117,7 @@ public sealed class H264Encoder : IDisposable
     {
         _device = device;
         _settings = settings;
+        BitrateKbps = settings.BitrateKbps;
         _activate = activate;
         IsHardware = hardware;
         Name = name;
@@ -167,7 +168,49 @@ public sealed class H264Encoder : IDisposable
     public string RateControl { get; private set; } = "";
 
     // Up to 1.5× the mean for a moment, e.g. an IDR after a still screen.
-    private uint PeakBitrate => (uint)(_settings.BitrateKbps * 1500L);
+    private uint PeakBitrate => PeakFor(_settings.BitrateKbps);
+
+    private static uint PeakFor(int kbps) => (uint)(kbps * 1500L);
+
+    // A new mean bitrate asked by the adaptive bitrate, applied on the encoder's thread before the next frame; 0 = none.
+    private volatile int _requestedKbps;
+
+    /// <summary>The mean bitrate in use, after any change made while encoding.</summary>
+    public int BitrateKbps { get; private set; }
+
+    /// <summary>Changes of bitrate the encoder refused (it keeps the old one).</summary>
+    public int RefusedBitrateChanges { get; private set; }
+
+    /// <summary>Asks for another mean bitrate from the next frame on; encoders without ICodecAPI ignore it.</summary>
+    public void SetBitrate(int kbps)
+    {
+        if (kbps > 0)
+            _requestedKbps = kbps;
+    }
+
+    private void ApplyRequestedBitrate()
+    {
+        var kbps = _requestedKbps;
+        if (kbps == 0 || _codecApi == IntPtr.Zero)
+            return;
+        _requestedKbps = 0;
+        if (kbps == BitrateKbps)
+            return;
+        // The mean must never go over the peak: raise the peak first going up, lower it last going down.
+        var vbr = RateControl == "VBR";
+        if (vbr && kbps > BitrateKbps)
+            Interop.CodecSetUInt32(_codecApi, CodecMaxBitRate, PeakFor(kbps));
+        if (Interop.CodecSetUInt32(_codecApi, CodecMeanBitRate, (uint)kbps * 1000) < 0)
+        {
+            RefusedBitrateChanges++;
+            if (vbr && kbps > BitrateKbps)
+                Interop.CodecSetUInt32(_codecApi, CodecMaxBitRate, PeakFor(BitrateKbps));
+            return;
+        }
+        if (vbr && kbps < BitrateKbps)
+            Interop.CodecSetUInt32(_codecApi, CodecMaxBitRate, PeakFor(kbps));
+        BitrateKbps = kbps;
+    }
 
     /// <summary>True when the encoder takes GPU textures; otherwise frames go through system memory.</summary>
     public bool TakesTextures => IsHardware;
@@ -537,6 +580,7 @@ public sealed class H264Encoder : IDisposable
                 return;
             throw new COMException("Guasto simulato dell'encoder (altrove-cli --simulate-failure)", unchecked((int)0x8000FFFF));
         }
+        ApplyRequestedBitrate();
         if (_keyframeRequested && _codecApi != IntPtr.Zero)
         {
             _keyframeRequested = false;

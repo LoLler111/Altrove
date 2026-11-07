@@ -5,7 +5,10 @@ import android.view.MotionEvent
 import android.view.SurfaceHolder
 import android.view.SurfaceView
 import android.view.View
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.runtime.key
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalContext
@@ -20,6 +23,8 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -57,9 +62,51 @@ import com.altrove.app.update.UpdateController
 @Composable
 fun ReceiverScreen(receiver: ReceiverController, updates: UpdateController) {
     val state by receiver.state.collectAsState()
-    when (val s = state) {
-        is ReceiverState.Streaming -> VideoScreen(receiver, s)
-        else -> WaitingScreen(receiver, s, updates)
+    val pin by receiver.pinRequest.collectAsState()
+    Box(Modifier.fillMaxSize()) {
+        when (val s = state) {
+            is ReceiverState.Streaming -> VideoScreen(receiver, s)
+            else -> WaitingScreen(receiver, s, updates)
+        }
+        // Over everything, also over a stream: another PC asking to connect.
+        pin?.let { PinOverlay(it, receiver::refusePin) }
+    }
+}
+
+/** The PIN a new PC has to type, big enough to read from the sofa. */
+@Composable
+private fun PinOverlay(request: ReceiverController.PinRequest, onRefuse: () -> Unit) {
+    val focus = remember { FocusRequester() }
+    LaunchedEffect(Unit) { runCatching { focus.requestFocus() } }
+    Box(
+        Modifier
+            .fillMaxSize()
+            .background(Color(0xCC000000))
+            .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {},
+        contentAlignment = Alignment.Center,
+    ) {
+        Column(
+            Modifier
+                .clip(RoundedCornerShape(16.dp))
+                .background(AltroveColors.Panel)
+                .padding(28.dp)
+                .widthIn(max = 480.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Text("«${request.senderName}» vuole collegarsi", color = AltroveColors.Text, fontSize = 20.sp, fontWeight = FontWeight.SemiBold, textAlign = TextAlign.Center)
+            Text("Scrivi questo codice in Altrove sul PC:", color = AltroveColors.TextDim, fontSize = 15.sp, textAlign = TextAlign.Center)
+            Text(
+                request.pin.chunked(3).joinToString(" "),
+                color = AltroveColors.Accent,
+                fontSize = 56.sp,
+                fontFamily = FontFamily.Monospace,
+                fontWeight = FontWeight.SemiBold,
+            )
+            if (request.wrong) Text("Il codice scritto sul PC era sbagliato: riprova.", color = AltroveColors.Danger, fontSize = 14.sp)
+            Text("Serve solo la prima volta: poi questo PC si collega da solo.", color = AltroveColors.TextDim, fontSize = 13.sp, textAlign = TextAlign.Center)
+            OutlinedButton(onClick = onRefuse, modifier = Modifier.focusRequester(focus)) { Text("Rifiuta") }
+        }
     }
 }
 
@@ -137,7 +184,44 @@ private fun WaitingScreen(receiver: ReceiverController, state: ReceiverState, up
                     Text(CAST_HINT, textAlign = TextAlign.Center, color = AltroveColors.TextDim, fontSize = 13.sp)
                 }
             }
+            PairingSettings(receiver)
         }
+    }
+}
+
+/** Who may connect: a PIN for new PCs (or not), and the PCs already trusted. */
+@Composable
+private fun PairingSettings(receiver: ReceiverController) {
+    val notice by receiver.notice.collectAsState()
+    val requirePin by receiver.requirePin.collectAsState()
+    val trusted by receiver.trustedPcs.collectAsState()
+    Spacer(Modifier.height(16.dp))
+    notice?.let { Text(it, color = AltroveColors.Danger, fontSize = 14.sp, textAlign = TextAlign.Center) }
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+        Text("Chiedi un PIN ai PC nuovi", color = AltroveColors.Text, fontSize = 15.sp)
+        listOf(true, false).forEach { value ->
+            FilterChip(
+                selected = requirePin == value,
+                onClick = { receiver.setRequirePin(value) },
+                label = { Text(if (value) "Sì" else "No") },
+                colors = FilterChipDefaults.filterChipColors(
+                    selectedContainerColor = AltroveColors.Accent,
+                    selectedLabelColor = AltroveColors.Background,
+                    labelColor = AltroveColors.Text,
+                ),
+            )
+        }
+    }
+    Text(
+        if (requirePin) "Chi è nella tua rete non può collegarsi né prendere lo schermo senza il codice che compare qui."
+        else "Qualsiasi PC della rete con Altrove può collegarsi e prendere lo schermo.",
+        color = AltroveColors.TextDim,
+        fontSize = 13.sp,
+        textAlign = TextAlign.Center,
+    )
+    if (trusted.isNotEmpty()) {
+        Text("PC abbinati: ${trusted.joinToString(", ")}", color = AltroveColors.TextDim, fontSize = 13.sp, textAlign = TextAlign.Center)
+        OutlinedButton(onClick = receiver::forgetTrustedPcs) { Text("Dimentica i PC abbinati") }
     }
 }
 
@@ -159,16 +243,27 @@ private fun StatusRow(color: Color, text: String) {
 @Composable
 private fun VideoScreen(receiver: ReceiverController, state: ReceiverState.Streaming) {
     var panelOpen by remember { mutableStateOf(false) }
+    var keyboardOpen by remember { mutableStateOf(false) }
     val firstFocus = remember { FocusRequester() }
-    // Back (or the remote's back key) opens and closes the panel instead of leaving the app.
-    BackHandler { panelOpen = !panelOpen }
+    // Back (or the remote's back key) opens and closes the panel instead of leaving the app; it closes the keyboard bar first.
+    BackHandler {
+        if (keyboardOpen) keyboardOpen = false else panelOpen = !panelOpen
+    }
     LaunchedEffect(panelOpen) {
         if (panelOpen) runCatching { firstFocus.requestFocus() }
     }
 
-    Box(
+    // While typing, the picture shrinks to stay whole above the keyboard.
+    Column(
         Modifier
             .fillMaxSize()
+            .background(Color.Black)
+            .then(if (keyboardOpen) Modifier.imePadding() else Modifier),
+    ) {
+    Box(
+        Modifier
+            .weight(1f)
+            .fillMaxWidth()
             .background(Color.Black)
             // The black bars are not the PC: a tap there always opens the panel.
             .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) { panelOpen = true },
@@ -249,8 +344,18 @@ private fun VideoScreen(receiver: ReceiverController, state: ReceiverState.Strea
                     .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) { panelOpen = false },
             )
             Box(Modifier.align(Alignment.CenterEnd)) {
-                SettingsPanel(receiver, state, firstFocus) { panelOpen = false }
+                SettingsPanel(
+                    receiver, state, firstFocus,
+                    onKeyboard = {
+                        panelOpen = false
+                        keyboardOpen = true
+                    },
+                ) { panelOpen = false }
             }
         }
+    }
+    if (keyboardOpen) {
+        KeyboardBar(send = receiver::sendKey, onClose = { keyboardOpen = false })
+    }
     }
 }

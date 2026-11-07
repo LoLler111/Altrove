@@ -151,8 +151,8 @@
                                    Visibility="{Binding IsExtend, Converter={StaticResource Visible}}"
                                    Text="Il ricevitore diventa un nuovo monitor, a destra degli altri e della stessa misura del suo schermo: trascinaci le finestre. Sparisce quando fermi la trasmissione." />
                         <CheckBox IsChecked="{Binding AllowTouch}" Margin="0,12,0,0"
-                                  ToolTip="Dal pannello del ricevitore si sceglie tra tocco (si clicca dove si tocca) e trackpad (il dito muove il puntatore).">
-                            <TextBlock Text="Usa il PC dal ricevitore (tocco e trackpad)" />
+                                  ToolTip="Dal pannello del ricevitore si sceglie tra tocco (si clicca dove si tocca) e trackpad (il dito muove il puntatore); la tastiera del ricevitore scrive nella finestra attiva del PC.">
+                            <TextBlock Text="Usa il PC dal ricevitore (tocco, trackpad e tastiera)" />
                         </CheckBox>
                         <CheckBox IsChecked="{Binding SendAudio}" Margin="0,8,0,0"
                                   ToolTip="Quello che il PC sta suonando arriva anche al ricevitore. Si accende e si spegne anche dal pannello del ricevitore.">
@@ -177,7 +177,11 @@
                         <TextBlock Style="{StaticResource SectionTitle}" Text="QUALITÀ (BITRATE)" Margin="0,8,0,8" />
                         <ItemsControl ItemsSource="{Binding BitrateChoices}" Tag="bitrate"
                                       ItemTemplate="{StaticResource ChipTemplate}" ItemsPanel="{StaticResource WrapPanel}" />
-                        <TextBlock FontSize="11.5" Foreground="{StaticResource TextDimBrush}" TextWrapping="Wrap" Margin="0,2,0,10"
+                        <CheckBox IsChecked="{Binding AdaptiveBitrate}" Margin="0,4,0,0"
+                                  ToolTip="Quando la rete non ce la fa, Altrove abbassa da solo la qualità invece di bloccare l'immagine, e la riporta su quella scelta appena la rete regge.">
+                            <TextBlock Text="Adatta la qualità alla rete (al massimo quella scelta)" />
+                        </CheckBox>
+                        <TextBlock FontSize="11.5" Foreground="{StaticResource TextDimBrush}" TextWrapping="Wrap" Margin="0,6,0,10"
                                    Text="Automatica adatta il flusso allo schermo del ricevitore. Se l'immagine scatta su Wi-Fi, prova 30 fps o un bitrate più basso." />
                         <CheckBox IsChecked="{Binding SoftwareEncoder}"
                                   ToolTip="Più lento: serve solo se la scheda video non ha un encoder H.264 o dà problemi.">
