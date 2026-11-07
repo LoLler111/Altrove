@@ -45,17 +45,21 @@ class VideoDecoder(
     /** Takes a frame from the network thread. Before the first IDR, and when far behind, frames are dropped. */
     fun submit(packet: VideoPacket) {
         if (queue.size > MAX_QUEUED && !packet.isKeyframe) {
-            // Far behind: throw the backlog away and wait for the sender's next IDR.
+            // Far behind: throw the backlog away and wait for the sender's next IDR. The marker tells the
+            // decoder thread where the hole is, in stream order: a flag set from here could be undone by a
+            // keyframe it took just before the clear, and the frames after the hole would be decoded.
             droppedFrames += queue.size + 1
             queue.clear()
-            waitingForKeyframe = true
+            queue.offer(GAP)
             requestKeyframe()
             return
         }
         queue.offer(packet)
     }
 
-    @Volatile private var waitingForKeyframe = true
+    // Decoder thread only. Every P-frame refers to the frames before it: once one is missing, nothing
+    // until the next IDR may reach the decoder, or the picture smears until the screen changes there.
+    private var waitingForKeyframe = true
 
     fun takeStats(): Triple<Int, Int, Double> {
         val result = Triple(renderedFrames, droppedFrames, decodeMillis)
@@ -81,7 +85,9 @@ class VideoDecoder(
                 } catch (e: InterruptedException) {
                     break
                 }
-                if (packet != null) {
+                if (packet === GAP) {
+                    waitingForKeyframe = true
+                } else if (packet != null) {
                     if (waitingForKeyframe) {
                         if (!packet.isKeyframe) {
                             droppedFrames++
@@ -94,7 +100,7 @@ class VideoDecoder(
                             waitingForKeyframe = true
                             null
                         }
-                        codec?.let { queueInput(it, packet, queuedAt) }
+                        codec?.let { queueInput(it, packet, info, queuedAt) }
                     }
                 }
                 codec?.let { drainOutput(it, info, queuedAt) }
@@ -160,25 +166,39 @@ class VideoDecoder(
         return MediaCodecList(MediaCodecList.REGULAR_CODECS).findDecoderForFormat(format)
     }
 
-    private fun queueInput(codec: MediaCodec, packet: VideoPacket, queuedAt: HashMap<Long, Long>) {
-        val index = codec.dequeueInputBuffer(20_000)
-        if (index < 0) {
-            droppedFrames++
-            return
+    private fun queueInput(codec: MediaCodec, packet: VideoPacket, info: MediaCodec.BufferInfo, queuedAt: HashMap<Long, Long>) {
+        // A busy decoder (frames arrive in bursts over Wi-Fi) gets a moment rather than losing the frame:
+        // every frame after a lost one would be decoded against a picture it was not made from.
+        val deadline = SystemClock.elapsedRealtime() + INPUT_WAIT_MS
+        var index = codec.dequeueInputBuffer(5_000)
+        while (index < 0) {
+            // Decoded frames it still holds can be what keeps its input full.
+            drainOutput(codec, info, queuedAt)
+            if (!running || SystemClock.elapsedRealtime() > deadline) {
+                Log.w(TAG, "Decoder busy for ${INPUT_WAIT_MS} ms: frame dropped, waiting for an IDR")
+                lose()
+                return
+            }
+            index = codec.dequeueInputBuffer(5_000)
         }
-        val buffer = codec.getInputBuffer(index) ?: return
-        buffer.clear()
-        if (packet.length > buffer.remaining()) {
+        val buffer = codec.getInputBuffer(index)
+        if (buffer == null || packet.length > buffer.capacity()) {
             codec.queueInputBuffer(index, 0, 0, packet.presentationMicros, 0)
-            droppedFrames++
-            waitingForKeyframe = true
-            requestKeyframe()
+            lose()
             return
         }
+        buffer.clear()
         buffer.put(packet.data, packet.offset, packet.length)
         queuedAt[packet.presentationMicros] = SystemClock.elapsedRealtimeNanos()
         if (queuedAt.size > 64) queuedAt.clear()
         codec.queueInputBuffer(index, 0, packet.length, packet.presentationMicros, 0)
+    }
+
+    /** A frame never reached the decoder: skip to the next IDR and ask the sender for one now. */
+    private fun lose() {
+        droppedFrames++
+        waitingForKeyframe = true
+        requestKeyframe()
     }
 
     private fun drainOutput(codec: MediaCodec, info: MediaCodec.BufferInfo, queuedAt: HashMap<Long, Long>) {
@@ -207,5 +227,9 @@ class VideoDecoder(
         const val TAG = "AltroveDecoder"
         // About 130 ms at 60 fps, as on the sender side.
         const val MAX_QUEUED = 8
+        // Longest wait for a free decoder input before the frame counts as lost.
+        const val INPUT_WAIT_MS = 150L
+        /** Queue marker: frames were thrown away here. */
+        val GAP = VideoPacket(0, 0, ByteArray(0), 0, 0)
     }
 }
