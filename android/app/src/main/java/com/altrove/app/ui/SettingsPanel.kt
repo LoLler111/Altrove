@@ -34,6 +34,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -62,6 +63,9 @@ fun SettingsPanel(
     val applying by receiver.applying.collectAsState()
     val inputMode by receiver.inputMode.collectAsState()
     val stats by receiver.stats.collectAsState()
+    val tvName by receiver.tvName.collectAsState()
+    val useTv by receiver.useTv.collectAsState()
+    val context = LocalContext.current
 
     Column(
         Modifier
@@ -86,6 +90,21 @@ fun SettingsPanel(
         )
         Spacer(Modifier.height(4.dp))
         Button(onClick = onClose, modifier = Modifier.fillMaxWidth().focusRequester(firstFocus)) { Text("Torna allo schermo") }
+
+        if (!CastSettings.isTvDevice(context)) {
+            val name = tvName
+            if (name != null) {
+                Section("TV «$name»")
+                Chips(listOf(true, false), useTv, true, { if (it) "Sulla TV" else "Su questo schermo" }, receiver::setUseTv)
+                Note(
+                    if (useTv) "Il PC è a tutto schermo sulla TV; qui restano pannello, tocco e trackpad."
+                    else "La TV mostra lo stesso schermo di questo dispositivo.",
+                )
+            } else {
+                OutlinedButton(onClick = { CastSettings.open(context) }, modifier = Modifier.fillMaxWidth()) { Text("Proietta su TV") }
+                Note(CAST_HINT)
+            }
+        }
 
         val current = settings
         if (Features.CONFIGURE !in features) {

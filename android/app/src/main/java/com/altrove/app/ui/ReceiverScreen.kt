@@ -4,6 +4,11 @@ import android.annotation.SuppressLint
 import android.view.MotionEvent
 import android.view.SurfaceHolder
 import android.view.SurfaceView
+import android.view.View
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.runtime.key
+import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.platform.LocalContext
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.rememberScrollState
@@ -54,12 +59,15 @@ fun ReceiverScreen(receiver: ReceiverController, updates: UpdateController) {
     val state by receiver.state.collectAsState()
     when (val s = state) {
         is ReceiverState.Streaming -> VideoScreen(receiver, s)
-        else -> WaitingScreen(s, updates)
+        else -> WaitingScreen(receiver, s, updates)
     }
 }
 
 @Composable
-private fun WaitingScreen(state: ReceiverState, updates: UpdateController) {
+private fun WaitingScreen(receiver: ReceiverController, state: ReceiverState, updates: UpdateController) {
+    val context = LocalContext.current
+    val tvName by receiver.tvName.collectAsState()
+    val useTv by receiver.useTv.collectAsState()
     Box(
         Modifier
             .fillMaxSize()
@@ -112,9 +120,31 @@ private fun WaitingScreen(state: ReceiverState, updates: UpdateController) {
                 is ReceiverState.Failed -> StatusRow(AltroveColors.Danger, state.message)
                 is ReceiverState.Streaming -> Unit
             }
+            if (!CastSettings.isTvDevice(context)) {
+                Spacer(Modifier.height(16.dp))
+                val name = tvName
+                if (name != null) {
+                    StatusRow(AltroveColors.Online, "TV collegata: «$name»")
+                    Text(
+                        if (useTv) "Quando il PC trasmette, lo schermo va sulla TV e qui restano pannello e trackpad."
+                        else "Il PC resta su questo schermo: si cambia dal pannello durante la trasmissione.",
+                        textAlign = TextAlign.Center,
+                        color = AltroveColors.TextDim,
+                        fontSize = 14.sp,
+                    )
+                } else {
+                    OutlinedButton(onClick = { CastSettings.open(context) }) { Text("Proietta su TV") }
+                    Text(CAST_HINT, textAlign = TextAlign.Center, color = AltroveColors.TextDim, fontSize = 13.sp)
+                }
+            }
         }
     }
 }
+
+/** How a Miracast TV gets linked, under every «Proietta su TV» button. */
+internal const val CAST_HINT =
+    "Sulla TV o sulla Fire TV attiva prima la duplicazione dello schermo (Miracast). " +
+        "Su Samsung il collegamento si fa con Smart View, dalla tendina rapida."
 
 @Composable
 private fun StatusRow(color: Color, text: String) {
@@ -144,35 +174,62 @@ private fun VideoScreen(receiver: ReceiverController, state: ReceiverState.Strea
             .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) { panelOpen = true },
         contentAlignment = Alignment.Center,
     ) {
-        AndroidView(
-            modifier = Modifier.aspectRatio(state.width.toFloat() / state.height, matchHeightConstraintsFirst = false),
-            factory = { context ->
-                SurfaceView(context).apply {
-                    holder.addCallback(object : SurfaceHolder.Callback {
-                        override fun surfaceCreated(holder: SurfaceHolder) = receiver.attachSurface(holder.surface)
-                        override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) = Unit
-                        override fun surfaceDestroyed(holder: SurfaceHolder) = receiver.detachSurface()
-                    })
+        val onTv by receiver.tvShowing.collectAsState()
+        val pictureShape = Modifier.aspectRatio(state.width.toFloat() / state.height, matchHeightConstraintsFirst = false)
+        // While the TV shows the PC, this screen keeps an area of the same shape for the fingers.
+        key(onTv) {
+            AndroidView(
+                modifier = pictureShape,
+                factory = { context ->
+                    val view = if (onTv) {
+                        View(context).apply { setBackgroundColor(AltroveColors.Panel2.toArgb()) }
+                    } else {
+                        SurfaceView(context).apply {
+                            holder.addCallback(object : SurfaceHolder.Callback {
+                                override fun surfaceCreated(holder: SurfaceHolder) = receiver.attachSurface(holder.surface)
+                                override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) = Unit
+                                override fun surfaceDestroyed(holder: SurfaceHolder) = receiver.detachSurface(holder.surface)
+                            })
+                        }
+                    }
                     // On the picture: fingers go to the PC as touches or as a trackpad; with neither, a tap opens the panel.
-                    val density = resources.displayMetrics.density
+                    val density = view.resources.displayMetrics.density
                     val trackpad = TrackpadGestures(slopPx = 8 * density, notchPx = 24 * density)
-                    setOnTouchListener { view, event ->
+                    view.setOnTouchListener { touched, event ->
                         when {
-                            receiver.sendsTouch -> TouchMapper.message(event, view.width, view.height)?.let(receiver::sendTouch)
+                            receiver.sendsTouch -> TouchMapper.message(event, touched.width, touched.height)?.let(receiver::sendTouch)
                             receiver.sendsMouse -> {
-                                trackpad.onEvent(event, view.width, view.height).forEach(receiver::sendMouse)
+                                trackpad.onEvent(event, touched.width, touched.height).forEach(receiver::sendMouse)
                                 // A single tap waits to see whether a second one follows.
                                 trackpad.deadline?.let { due ->
-                                    view.postDelayed({ trackpad.onTimeout(due).forEach(receiver::sendMouse) }, due - event.eventTime)
+                                    touched.postDelayed({ trackpad.onTimeout(due).forEach(receiver::sendMouse) }, due - event.eventTime)
                                 }
                             }
                             event.actionMasked == MotionEvent.ACTION_UP -> panelOpen = true
                         }
                         true
                     }
-                }
-            },
-        )
+                    view
+                },
+            )
+        }
+        if (onTv) {
+            val tvName by receiver.tvName.collectAsState()
+            // Read so the text follows the panel's choice; the getters below depend on it.
+            @Suppress("UNUSED_VARIABLE") val inputMode by receiver.inputMode.collectAsState()
+            Text(
+                "Lo schermo del PC è sulla TV" + (tvName?.let { " «$it»" } ?: "") + ".\nQui le dita fanno da " +
+                    when {
+                        receiver.sendsMouse -> "trackpad."
+                        receiver.sendsTouch -> "tocco, come se toccassi lo schermo della TV."
+                        else -> "comando: un tocco apre il pannello."
+                    },
+                color = AltroveColors.TextDim,
+                fontSize = 16.sp,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.padding(32.dp),
+            )
+        }
 
         // The way back to the panel while touch control takes every tap: a tab on the left edge.
         Box(

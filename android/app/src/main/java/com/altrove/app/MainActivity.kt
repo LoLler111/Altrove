@@ -18,13 +18,16 @@ import com.altrove.app.receiver.ReceiverController
 import com.altrove.app.receiver.ReceiverState
 import com.altrove.app.ui.AltroveTheme
 import com.altrove.app.ui.ReceiverScreen
+import com.altrove.app.ui.TvOutput
 import com.altrove.app.update.UpdateController
 import com.altrove.app.update.UpdateState
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
     private lateinit var receiver: ReceiverController
     private lateinit var updates: UpdateController
+    private lateinit var tv: TvOutput
 
     // Asked when the PC turns "Microfono Altrove" on and Android has not allowed the microphone yet.
     private val micPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
@@ -36,6 +39,7 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         receiver = ReceiverController(applicationContext)
         updates = UpdateController(applicationContext)
+        tv = TvOutput(this, receiver)
         setContent {
             AltroveTheme {
                 ReceiverScreen(receiver, updates)
@@ -46,6 +50,10 @@ class MainActivity : ComponentActivity() {
             receiver.micPermissionNeeded.collect { needed ->
                 if (needed) micPermission.launch(Manifest.permission.RECORD_AUDIO)
             }
+        }
+        // A TV linked with Smart View or Trasmetti takes the picture while the PC streams.
+        lifecycleScope.launch {
+            combine(receiver.state, receiver.useTv) { state, _ -> state }.collect(tv::update)
         }
         lifecycleScope.launch {
             receiver.state.collect { state ->
@@ -66,6 +74,7 @@ class MainActivity : ComponentActivity() {
     override fun onStart() {
         super.onStart()
         receiver.start(displayInfo())
+        tv.start()
         updates.checkOnce()
     }
 
@@ -76,6 +85,7 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onStop() {
+        tv.stop()
         receiver.stop()
         super.onStop()
     }

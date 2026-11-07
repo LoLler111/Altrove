@@ -170,16 +170,50 @@ class ReceiverController(private val context: Context) : ReceiverServer.Listener
         _state.value = waiting()
     }
 
+    /** The picture goes to [surface] from now on: the tablet's own, or the TV's while one shows it. */
     fun attachSurface(surface: Surface) = synchronized(lock) {
         this.surface = surface
         startDecoder()
     }
 
-    fun detachSurface() = synchronized(lock) {
+    /** [surface] is going away. Ignored when another one already took its place (moving to or from the TV). */
+    fun detachSurface(surface: Surface) = synchronized(lock) {
+        if (this.surface !== surface) return
         decoder?.release()
         decoder = null
-        surface = null
+        this.surface = null
     }
+
+    // ---- A TV linked through Android's own casting (Miracast: Smart View, Trasmetti) ----
+
+    private val _tvName = MutableStateFlow<String?>(null)
+    private val _tvShowing = MutableStateFlow(false)
+    private val _useTv = MutableStateFlow(prefs.getBoolean("tv", true))
+    @Volatile private var tvDisplay: DisplayInfo? = null
+
+    /** The name of the wireless screen Android offers for a second picture; null when none is linked. */
+    val tvName: StateFlow<String?> = _tvName
+    /** The PC's picture is on the TV now, and this screen is left for the panel and the fingers. */
+    val tvShowing: StateFlow<Boolean> = _tvShowing
+    /** The user's choice: the PC on the TV when one is linked, or on this screen as usual. */
+    val useTv: StateFlow<Boolean> = _useTv
+
+    fun setUseTv(on: Boolean) {
+        _useTv.value = on
+        prefs.edit().putBoolean("tv", on).apply()
+    }
+
+    fun onTvDisplay(name: String?, info: DisplayInfo?) {
+        tvDisplay = info
+        _tvName.value = name
+    }
+
+    fun onTvShowing(showing: Boolean) {
+        _tvShowing.value = showing
+    }
+
+    /** The screen the PC should size the stream for: the TV when the picture will go there. */
+    private val shownDisplay get() = tvDisplay?.takeIf { _useTv.value } ?: display
 
     private fun startDecoder() {
         val surface = surface ?: return
@@ -212,7 +246,7 @@ class ReceiverController(private val context: Context) : ReceiverServer.Listener
             id = deviceId,
             name = deviceName(),
             app = BuildConfig.VERSION_NAME,
-            display = display,
+            display = shownDisplay,
             codecs = listOf("h264"),
             maxWidth = maxStreamSize().first,
             maxHeight = maxStreamSize().second,
@@ -375,8 +409,9 @@ class ReceiverController(private val context: Context) : ReceiverServer.Listener
      * resolution that fits the screen. Sizes in this screen's shape come first, so its own is never refused.
      */
     private fun maxStreamSize(): Pair<Int, Int> {
-        val long = maxOf(display.width, display.height)
-        val short = minOf(display.width, display.height)
+        val screen = shownDisplay
+        val long = maxOf(screen.width, screen.height)
+        val short = minOf(screen.width, screen.height)
         val aspect = long.toDouble() / short
         val ownShape = listOf(2160, 1600, 1440, 1200, 1080, 900, 720).map { h -> ((h * aspect).toInt() and 1.inv()) to h }
         val sizes = (ownShape + listOf(3840 to 2160, 2560 to 1440, 1920 to 1080, 1280 to 720)).sortedByDescending { it.first * it.second }

@@ -39,6 +39,13 @@ Testi per l'utente in italiano, commenti e nomi nel codice in inglese (come in S
   → usbip-win2 → usbaudio2.sys di Windows. Adattato da celmic (MIT). `UsbIpSetup` fissa la release 0.9.8.1 e la sua SHA-256.
   Nella VM in Desktop remoto il microfono si collega e Windows lo riconosce, ma le app vedono solo «Audio remoto».
 
+- Proietta su TV (Miracast; la TV o la Fire TV resta nella sua modalità integrata, lì non si installa niente). Un'app non
+  può aprire Miracast da sola (`setWfdInfo` è di sistema): Android → `ui/CastSettings` apre la proiezione di sistema,
+  poi `ui/TvOutput` mette il video del PC sul display di presentazione (Presentation) e il tablet resta per pannello e
+  dita; `ReceiverController.detachSurface(surface)` ignora la superficie già sostituita. Windows → `CastPanel` preme Win+K
+  (il fisso non ha Wi-Fi: lì un messaggio rimanda al tablet). Se Smart View di Samsung offra il display di presentazione
+  va ancora verificato su un dispositivo vero (`adb shell dumpsys display`, cercare `FLAG_PRESENTATION`).
+
 ## Rilasci e aggiornamenti
 - Repository pubblico `LoLler111/Altrove`; un tag `vX.Y.Z` uguale a `version.txt` fa partire `.github/workflows/release.yml`
   (`publish.ps1` + `vpk upload github`, APK aggiunto prima di togliere la bozza). Schema copiato da SoundBoardKing.
@@ -66,5 +73,7 @@ Testi per l'utente in italiano, commenti e nomi nel codice in inglese (come in S
 - Prova del pannello e del tocco nell'emulatore: girarlo in orizzontale, avviare `Altrove.exe` con Start-Process
   (un processo lanciato dentro un comando Bash muore con il comando) e guidarlo con UI Automation; sull'emulatore
   `adb shell uiautomator dump` trova i pulsanti per testo. Gli errori dell'app finiscono in `%LOCALAPPDATA%\Altrove\altrove.log`.
+- TV simulata nell'emulatore: `adb shell settings put global overlay_display_devices 1280x720/240` (ha `FLAG_PRESENTATION`
+  come uno schermo Miracast; `null` la toglie); `adb shell dumpsys SurfaceFlinger --display-id` dà l'id per `screencap -d`.
 - Zip di prova per il fisso: `dotnet publish` autonomo (win-x64) di App e Cli in `artifacts/Altrove-prova`,
   più `tools/prova/*` e l'APK.

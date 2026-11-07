@@ -237,6 +237,26 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
         }
     }
 
+    /// <summary>Windows' Miracast panel (Win+K), for a TV or a Fire TV in its screen mirroring mode.</summary>
+    [RelayCommand]
+    private void CastToTv()
+    {
+        if (!CastPanel.HasWifi())
+        {
+            ShowError("Questo PC non ha il Wi-Fi, che serve a Miracast. Proietta dal tablet: Altrove sul tablet → «Proietta su TV».");
+            return;
+        }
+        try
+        {
+            CastPanel.Open();
+        }
+        catch (Exception ex)
+        {
+            App.Log($"Win+K non riuscito: {ex.Message}");
+            ShowError("Apri «Trasmetti» con Win+K.");
+        }
+    }
+
     [RelayCommand]
     private void RestartToUpdate()
     {

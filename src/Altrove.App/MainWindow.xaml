@@ -193,6 +193,7 @@
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="*" />
                 <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="Auto" />
             </Grid.ColumnDefinitions>
             <StackPanel VerticalAlignment="Center" Margin="2,0,16,0">
                 <TextBlock Text="{Binding Status}" TextWrapping="Wrap">
@@ -209,7 +210,9 @@
                 </TextBlock>
                 <TextBlock Text="{Binding Stats}" Foreground="{StaticResource TextDimBrush}" FontSize="12" Margin="0,2,0,0" />
             </StackPanel>
-            <Button Grid.Column="1" MinWidth="150" Content="{Binding StartStopLabel}" Command="{Binding StartStopCommand}">
+            <Button Grid.Column="1" Margin="0,0,10,0" Padding="14,6" Content="Proietta su TV" Command="{Binding CastToTvCommand}"
+                    ToolTip="Apre «Trasmetti» di Windows (Win+K): sulla TV o sulla Fire TV attiva prima la duplicazione dello schermo (Miracast). Poi Win+P sceglie se duplicare o estendere." />
+            <Button Grid.Column="2" MinWidth="150" Content="{Binding StartStopLabel}" Command="{Binding StartStopCommand}">
                 <Button.Style>
                     <Style TargetType="Button" BasedOn="{StaticResource AccentButton}">
                         <Style.Triggers>
