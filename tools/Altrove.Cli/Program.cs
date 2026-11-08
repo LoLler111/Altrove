@@ -44,6 +44,8 @@ try
         "touch" => await Touch(options, args.Contains("--seconds")),
         "scale" => Scale(options),
         "audio" => await AudioTest(options),
+        "mic-install" => MicInstall(args),
+        "mic-uninstall" => MicUninstall(args),
         "mic-selftest" => MicSelfTest(),
         "mic-tone" => await MicTone(options),
         "stress" => await Stress(options),
@@ -394,6 +396,25 @@ static int VddUninstall(string[] args)
         return RunElevated(args);
     Altrove.Capture.VirtualDisplay.DriverInstaller.Uninstall();
     Console.WriteLine("Driver rimosso.");
+    return 0;
+}
+
+// usbip-win2 drivers for the tablet's microphone, from the bundled folder (asks for administrator rights).
+static int MicInstall(string[] args)
+{
+    if (!Altrove.Capture.VirtualDisplay.DriverInstaller.IsAdministrator)
+        return RunElevated(args);
+    var restart = Altrove.Capture.Microphone.UsbIpSetup.Install();
+    Console.WriteLine(restart ? "Driver di usbip-win2 installati: riavvia Windows prima di usare il microfono." : "Driver di usbip-win2 installati.");
+    return 0;
+}
+
+static int MicUninstall(string[] args)
+{
+    if (!Altrove.Capture.VirtualDisplay.DriverInstaller.IsAdministrator)
+        return RunElevated(args);
+    Altrove.Capture.Microphone.UsbIpSetup.Uninstall();
+    Console.WriteLine("Controller USB di usbip-win2 rimosso (i pacchetti dei driver restano nell'archivio di Windows).");
     return 0;
 }
 

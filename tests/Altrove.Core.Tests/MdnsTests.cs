@@ -51,6 +51,72 @@ public class MdnsTests
         Assert.Equal("10.0.0.9:47800", receiver.Id);
     }
 
+    private static DiscoveredReceiver Sighting(bool withTxt, string from = "192.168.1.50", int seconds = 0, string instance = "Tab A")
+    {
+        var builder = new ResponseBuilder()
+            .Ptr(Service, instance + "." + Service)
+            .Srv(instance + "." + Service, 47800, "android.local");
+        if (withTxt)
+            builder.Txt(instance + "." + Service, "id=tab-a", "name=Tab A", "protocol=1");
+        return Assert.Single(MdnsBrowser.Interpret(builder.Build(), IPAddress.Parse(from), Service, DateTimeOffset.UnixEpoch.AddSeconds(seconds)));
+    }
+
+    [Fact]
+    public void Answer_without_txt_refreshes_the_known_receiver_instead_of_adding_it_twice()
+    {
+        var table = new ReceiverTable(TimeSpan.FromSeconds(7));
+        Assert.True(table.Update(Sighting(withTxt: true)));
+        Assert.False(table.Update(Sighting(withTxt: false, seconds: 3)));
+
+        var receiver = Assert.Single(table.Receivers);
+        Assert.Equal("tab-a", receiver.Id);
+        Assert.Equal(DateTimeOffset.UnixEpoch.AddSeconds(3), receiver.LastSeen);
+    }
+
+    [Fact]
+    public void Receiver_first_seen_without_txt_is_replaced_once_its_id_arrives()
+    {
+        var table = new ReceiverTable(TimeSpan.FromSeconds(7));
+        table.Update(Sighting(withTxt: false));
+        Assert.Equal("192.168.1.50:47800", Assert.Single(table.Receivers).Id);
+
+        Assert.True(table.Update(Sighting(withTxt: true, seconds: 1)));
+        Assert.Equal("tab-a", Assert.Single(table.Receivers).Id);
+    }
+
+    [Fact]
+    public void Answer_without_txt_from_the_other_network_is_matched_by_instance_name()
+    {
+        var table = new ReceiverTable(TimeSpan.FromSeconds(7));
+        table.Update(Sighting(withTxt: true));
+        table.Update(Sighting(withTxt: false, from: "172.20.3.9", seconds: 1));
+        Assert.Equal("192.168.1.50", Assert.Single(table.Receivers).Host);
+
+        // Silent on the first network for longer than the hold: the other address takes over, same entry.
+        table.Update(Sighting(withTxt: false, from: "172.20.3.9", seconds: 9));
+        var receiver = Assert.Single(table.Receivers);
+        Assert.Equal(("tab-a", "172.20.3.9"), (receiver.Id, receiver.Host));
+    }
+
+    [Fact]
+    public void Two_devices_with_the_same_name_stay_two()
+    {
+        var table = new ReceiverTable(TimeSpan.FromSeconds(7));
+        table.Update(Sighting(withTxt: true));
+        table.Update(Sighting(withTxt: false, from: "192.168.1.51", instance: "Tab A (2)"));
+        Assert.Equal(2, table.Receivers.Count);
+    }
+
+    [Fact]
+    public void Silent_receivers_expire()
+    {
+        var table = new ReceiverTable(TimeSpan.FromSeconds(7));
+        table.Update(Sighting(withTxt: true));
+        Assert.False(table.Expire(DateTimeOffset.UnixEpoch));
+        Assert.True(table.Expire(DateTimeOffset.UnixEpoch.AddSeconds(1)));
+        Assert.Empty(table.Receivers);
+    }
+
     [Fact]
     public void Other_services_queries_and_garbage_are_ignored()
     {

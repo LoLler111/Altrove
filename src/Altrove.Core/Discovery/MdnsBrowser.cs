@@ -10,6 +10,12 @@ namespace Altrove.Core.Discovery;
 public sealed record DiscoveredReceiver(string Id, string Name, string Host, int Port, int Protocol, DateTimeOffset LastSeen)
 {
     public string Address => Host.Contains(':') ? $"[{Host}]:{Port}" : $"{Host}:{Port}";
+
+    /// <summary>The mDNS instance name, without the service.</summary>
+    internal string Instance { get; init; } = "";
+
+    /// <summary>True when the response had no TXT id, so <see cref="Id"/> is just the address.</summary>
+    internal bool IdFromAddress { get; init; }
 }
 
 /// <summary>
@@ -37,7 +43,7 @@ public sealed class MdnsBrowser : IDisposable
     private readonly TimeProvider _time;
     private readonly int _unicastPort;
     private readonly bool _loopbackOnly;
-    private readonly ConcurrentDictionary<string, DiscoveredReceiver> _receivers = new();
+    private readonly ReceiverTable _receivers = new(AddressHold);
     private readonly Dictionary<IPAddress, UdpClient> _sockets = [];
     private readonly Dictionary<IPAddress, int> _prefixes = [];
     // Addresses that answered for our service, and when: asked directly at every round.
@@ -68,8 +74,7 @@ public sealed class MdnsBrowser : IDisposable
     /// <summary>Raised on a background thread whenever a receiver appears, changes or disappears.</summary>
     public event Action<IReadOnlyList<DiscoveredReceiver>>? Changed;
 
-    public IReadOnlyList<DiscoveredReceiver> Receivers =>
-        _receivers.Values.OrderBy(r => r.Name, StringComparer.CurrentCultureIgnoreCase).ToList();
+    public IReadOnlyList<DiscoveredReceiver> Receivers => _receivers.Receivers;
 
     public void Start() => _loop ??= Task.Run(() => QueryLoopAsync(_stop.Token));
 
@@ -286,17 +291,8 @@ public sealed class MdnsBrowser : IDisposable
                 _responders[source.IsIPv4MappedToIPv6 ? source.MapToIPv4() : source] = _time.GetUtcNow();
             }
             var changed = false;
-            foreach (var found1 in found)
-            {
-                var receiver = found1;
-                var previous = _receivers.GetValueOrDefault(receiver.Id);
-                // A device answering on two networks (LAN and a virtual switch) would flip between addresses:
-                // keep the one we have while it is still answering there, switch only once it falls silent.
-                if (previous is not null && previous.Host != receiver.Host && receiver.LastSeen - previous.LastSeen < AddressHold)
-                    continue;
-                _receivers[receiver.Id] = receiver;
-                changed |= previous is null || previous with { LastSeen = receiver.LastSeen } != receiver;
-            }
+            foreach (var receiver in found)
+                changed |= _receivers.Update(receiver);
             if (changed)
                 Changed?.Invoke(Receivers);
         }
@@ -304,14 +300,7 @@ public sealed class MdnsBrowser : IDisposable
 
     private void Expire()
     {
-        var limit = _time.GetUtcNow() - Expiry;
-        var removed = false;
-        foreach (var (id, receiver) in _receivers)
-        {
-            if (receiver.LastSeen < limit)
-                removed |= _receivers.TryRemove(id, out _);
-        }
-        if (removed)
+        if (_receivers.Expire(_time.GetUtcNow() - Expiry))
             Changed?.Invoke(Receivers);
     }
 
@@ -349,9 +338,13 @@ public sealed class MdnsBrowser : IDisposable
             var host = source.IsIPv4MappedToIPv6 ? source.MapToIPv4().ToString() : source.ToString();
             var label = instance![..^(service.Length + 1)];
             var name = txt.GetValueOrDefault("name") is { Length: > 0 } n ? n : label;
-            var id = txt.GetValueOrDefault("id") is { Length: > 0 } i ? i : $"{host}:{port}";
+            var ownId = txt.GetValueOrDefault("id") is { Length: > 0 } i ? i : null;
             var protocol = int.TryParse(txt.GetValueOrDefault("protocol"), out var p) ? p : AltroveProtocol.Version;
-            result.Add(new DiscoveredReceiver(id, name, host, port, protocol, now));
+            result.Add(new DiscoveredReceiver(ownId ?? $"{host}:{port}", name, host, port, protocol, now)
+            {
+                Instance = label,
+                IdFromAddress = ownId is null,
+            });
         }
         return result;
     }

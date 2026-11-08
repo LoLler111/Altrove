@@ -9,6 +9,12 @@ public partial class App : Application
     /// <summary>Argument of the elevated copy of Altrove that installs the virtual display driver.</summary>
     public const string InstallVirtualDisplayArgument = "--install-virtual-display";
 
+    /// <summary>Argument of the elevated copy of Altrove that installs usbip-win2's drivers for the tablet's microphone.</summary>
+    public const string InstallMicArgument = "--install-mic";
+
+    /// <summary>Exit code of that copy when Windows must restart before the microphone works (as Windows Installer's).</summary>
+    public const int ExitRestartNeeded = 3010;
+
     /// <summary>Where errors nobody caught end up, for bug reports: %LOCALAPPDATA%\Altrove\altrove.log.</summary>
     public static string LogPath => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Altrove", "altrove.log");
 
@@ -35,6 +41,11 @@ public partial class App : Application
             Shutdown(InstallVirtualDisplay());
             return;
         }
+        if (e.Args.Contains(InstallMicArgument))
+        {
+            Shutdown(InstallMic());
+            return;
+        }
         new MainWindow().Show();
     }
 
@@ -50,6 +61,21 @@ public partial class App : Application
         catch (Exception ex)
         {
             MessageBox.Show($"Installazione dello schermo virtuale non riuscita:\n{ex.Message}", "Altrove", MessageBoxButton.OK, MessageBoxImage.Error);
+            return 1;
+        }
+    }
+
+    /// <summary>Runs as administrator: installs the drivers of the bundled usbip-win2.</summary>
+    private static int InstallMic()
+    {
+        try
+        {
+            return Altrove.Capture.Microphone.UsbIpSetup.Install() ? ExitRestartNeeded : 0;
+        }
+        catch (Exception ex)
+        {
+            Log($"Installazione di usbip-win2 non riuscita: {ex}");
+            MessageBox.Show($"Installazione del microfono non riuscita:\n{ex.Message}", "Altrove", MessageBoxButton.OK, MessageBoxImage.Error);
             return 1;
         }
     }

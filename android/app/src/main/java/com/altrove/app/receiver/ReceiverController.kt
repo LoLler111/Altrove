@@ -347,6 +347,48 @@ class ReceiverController(private val context: Context) : ReceiverServer.Listener
 
     fun onTvShowing(showing: Boolean) {
         _tvShowing.value = showing
+        adjustFpsForTv()
+    }
+
+    // The fps chosen before the picture went to the TV, to put back when it comes back here. Kept on disk: the PC
+    // saves the 30 as its choice, and an app closed while on the TV must still put the user's choice back next time.
+    private var fpsBeforeTv: Int?
+        get() = prefs.getInt("fpsBeforeTv", 0).takeIf { it > 0 }
+        set(value) = prefs.edit().putInt("fpsBeforeTv", value ?: 0).apply()
+
+    // When the last start arrived: right after it the PC may still be starting sound and microphone, and a 0.5.0 PC
+    // dropped a configure sent then without answering. The TV's request waits a little.
+    @Volatile private var lastStartAt = 0L
+    private var tvRetry: Job? = null
+
+    /**
+     * Android's Miracast sends at most 30 fps to the TV: more from the PC only costs this device a decoder twice as
+     * busy and Wi-Fi time, when its single radio also carries the Miracast link (Wi-Fi Direct, not through the router).
+     * So while the picture is on the TV the PC is asked for 30, once; a choice made afterwards in the panel stays.
+     */
+    @Synchronized
+    private fun adjustFpsForTv() {
+        val current = _settings.value ?: return
+        if (Features.CONFIGURE !in _features.value || _applying.value) return
+        val sinceStart = android.os.SystemClock.elapsedRealtime() - lastStartAt
+        if (sinceStart < STREAM_SETTLE_MS) {
+            tvRetry?.cancel()
+            tvRetry = scope.launch {
+                delay(STREAM_SETTLE_MS - sinceStart)
+                adjustFpsForTv()
+            }
+            return
+        }
+        if (_tvShowing.value) {
+            if (fpsBeforeTv == null && current.fps > TV_FPS && TV_FPS in current.choices.fps) {
+                fpsBeforeTv = current.fps
+                configure(Configure(fps = TV_FPS))
+            }
+        } else {
+            val before = fpsBeforeTv ?: return
+            fpsBeforeTv = null
+            if (current.fps == TV_FPS && before in current.choices.fps) configure(Configure(fps = before))
+        }
     }
 
     /** The screen the PC should size the stream for: the TV when the picture will go there. */
@@ -387,6 +429,7 @@ class ReceiverController(private val context: Context) : ReceiverServer.Listener
     override fun onControl(connection: WebSocket, message: ControlMessage) {
         when (message) {
             is Start -> {
+                lastStartAt = android.os.SystemClock.elapsedRealtime()
                 synchronized(lock) {
                     stream = message
                     startDecoder()
@@ -416,6 +459,7 @@ class ReceiverController(private val context: Context) : ReceiverServer.Listener
                 applyingJob?.cancel()
                 _applying.value = false
                 updateMic()
+                adjustFpsForTv() // the PC connected, or answered, while the picture is on the TV
             }
             is Bye -> connection.close()
             else -> Unit
@@ -517,6 +561,12 @@ class ReceiverController(private val context: Context) : ReceiverServer.Listener
     private companion object {
         /** A PIN left on screen this long without the right answer is withdrawn. */
         const val PIN_TIMEOUT_MS = 120_000L
+
+        /** What Android's Miracast sends to a TV at most. */
+        const val TV_FPS = 30
+
+        /** How long after a start the automatic request for the TV waits. */
+        const val STREAM_SETTLE_MS = 3_000L
     }
 
     private fun waiting(port: Int = server?.port ?: AltroveProtocol.DEFAULT_PORT) =

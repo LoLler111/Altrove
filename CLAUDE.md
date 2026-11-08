@@ -47,7 +47,11 @@ Testi per l'utente in italiano, commenti e nomi nel codice in inglese (come in S
   (decoder Opus di Android, AudioTrack a bassa latenza, scarta oltre 150 ms). `altrove-cli audio` lo prova senza tablet.
 - Microfono: `receiver/MicCapture.kt` (VOICE_COMMUNICATION, Opus di Android o PCM, pacchetti tipo 3) → `SenderSession.MicPacketReceived`
   → `Capture/Microphone/MicBridge` → `Core/UsbMic` (jitter buffer, microfono USB Audio 2.0) → `UsbIpMicServer` su 127.0.0.1:47809
-  → usbip-win2 → usbaudio2.sys di Windows. Adattato da celmic (MIT). `UsbIpSetup` fissa la release 0.9.8.1 e la sua SHA-256.
+  → usbip-win2 → usbaudio2.sys di Windows. Adattato da celmic (MIT). Di usbip-win2 0.9.8.1 Altrove porta con sé solo
+  driver UDE, filtro e usbip.exe (`third_party/usbip-win2`, firmati: non modificarli); `UsbIpSetup.Install` (Altrove.exe
+  `--install-mic` da amministratore, o `altrove-cli mic-install`) fa come l'installatore: `DiInstallDriver` del filtro,
+  poi nodo radice `ROOT\USBIP_WIN2\UDE` (`Native/RootDevice`, lo stesso del monitor virtuale). Un usbip-win2 completo
+  già installato in Programmi ha la precedenza (il suo usbip.exe va con il suo driver).
   Nella VM in Desktop remoto il microfono si collega e Windows lo riconosce, ma le app vedono solo «Audio remoto».
 
 - Proietta su TV (Miracast; la TV o la Fire TV resta nella sua modalità integrata, lì non si installa niente). Un'app non

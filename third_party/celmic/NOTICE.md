@@ -57,5 +57,5 @@ SOFTWARE.```
 
 ## usbip-win2
 
-Non incluso: Altrove scarica alla prima richiesta la release [usbip-win2 0.9.8.1](https://github.com/vadimgrn/usbip-win2/releases/tag/v.0.9.8.1)
-(licenza BSD-2-Clause, driver firmati da Microsoft) e ne controlla l'impronta SHA-256 prima di installarla.
+La parte che serve (i due driver firmati da Microsoft e usbip.exe) della release [usbip-win2 0.9.8.1](https://github.com/vadimgrn/usbip-win2/releases/tag/v.0.9.8.1)
+è in `third_party/usbip-win2`, file non modificati: licenza BSD-2-Clause in `third_party/usbip-win2/LICENSE.txt`.

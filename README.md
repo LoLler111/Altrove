@@ -106,8 +106,8 @@ amministratore né le richieste di permesso (UAC).
 
 **Microfono**: con «Usa il microfono del ricevitore» la voce del tablet diventa **«Microfono Altrove»** in Windows: in Teams,
 Discord o Zoom lo scegli come un microfono qualsiasi. Altrove lo presenta come microfono USB grazie a
-[usbip-win2](https://github.com/vadimgrn/usbip-win2) (open source, driver firmati da Microsoft), che la prima volta scarica
-e installa con un permesso di amministratore; nessun programma esterno da configurare. Sul tablet si accende e si spegne
+[usbip-win2](https://github.com/vadimgrn/usbip-win2) (open source, driver firmati da Microsoft), già compreso in Altrove: la prima volta ne
+installa i driver con un permesso di amministratore; nessun programma esterno da configurare. Sul tablet si accende e si spegne
 dal pannello (Android chiede il permesso del microfono la prima volta) e usa la cancellazione dell'eco. Il codice del
 microfono USB è adattato da [celmic](https://github.com/blackfoxsoftware/celmic) (MIT): vedi `third_party/celmic/NOTICE.md`.
 
@@ -144,6 +144,7 @@ La prima volta Windows può chiedere di permettere ad Altrove l'accesso alla ret
 | `altrove-cli touch 0.5,0.5 [--seconds 2]` | Un tocco (o una pressione lunga) come lo manderebbe il ricevitore, a x,y da 0 a 1 sullo schermo `--monitor N` |
 | `altrove-cli scale [150] [--monitor N]` | Legge (o imposta) la scala di Windows di uno schermo |
 | `altrove-cli audio [pcm] --seconds 5` | Registra quello che suona il PC come lo riceverebbe il tablet, lo ridecodifica e salva `altrove-audio.wav` |
+| `altrove-cli mic-install` / `mic-uninstall` | Installa i driver di usbip-win2 compresi in Altrove o toglie il controller USB emulato (chiede i permessi di amministratore) |
 | `altrove-cli mic-selftest` | Fa la parte di usbip-win2 contro il microfono USB di Altrove e controlla che il suono esca con i tempi giusti (non serve installare niente) |
 | `altrove-cli mic-tone --seconds 30` | Collega davvero «Microfono Altrove» con un tono a 440 Hz, da registrare con un'app qualsiasi |
 | `altrove-cli stress capture\|convert\|encode --seconds 60` | Un pezzo della catena da solo per un minuto, per cercare perdite e crash |

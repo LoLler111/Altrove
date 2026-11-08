@@ -1,7 +1,6 @@
-using System.ComponentModel;
-using System.Runtime.InteropServices;
 using System.Security.AccessControl;
 using System.Security.Principal;
+using Altrove.Capture.Native;
 using Microsoft.Win32;
 
 namespace Altrove.Capture.VirtualDisplay;
@@ -20,67 +19,24 @@ public static class DriverInstaller
 
     private const string SettingsKey = @"SOFTWARE\MikeTheTech\VirtualDisplayDriver";
 
+    private static readonly Guid DisplayClass = new("4d36e968-e325-11ce-bfc1-08002be10318");
+
     public static bool IsAdministrator =>
         new WindowsPrincipal(WindowsIdentity.GetCurrent()).IsInRole(WindowsBuiltInRole.Administrator);
 
     /// <summary>True when a device for the driver exists (it may still be disabled).</summary>
-    public static bool IsInstalled() => FindDevices().Count > 0;
+    public static bool IsInstalled() => RootDevice.Exists(DisplayClass, HardwareId);
 
     public static void Install(string infPath, string initialSettingsXml)
     {
         if (!File.Exists(infPath))
             throw new FileNotFoundException("Driver package not found.", infPath);
-
         PrepareSettings(initialSettingsXml);
-
-        if (FindDevices().Count == 0)
-        {
-            var classGuid = DisplayClass;
-            var list = SetupDiCreateDeviceInfoList(ref classGuid, IntPtr.Zero);
-            if (list == InvalidHandle)
-                throw new Win32Exception();
-            try
-            {
-                var info = new SpDevinfoData { Size = Marshal.SizeOf<SpDevinfoData>() };
-                if (!SetupDiCreateDeviceInfoW(list, "Display", ref classGuid, null, IntPtr.Zero, DicdGenerateId, ref info))
-                    throw new Win32Exception();
-                var ids = System.Text.Encoding.Unicode.GetBytes(HardwareId + "\0\0");
-                if (!SetupDiSetDeviceRegistryPropertyW(list, ref info, SpdrpHardwareId, ids, ids.Length))
-                    throw new Win32Exception();
-                if (!SetupDiCallClassInstaller(DifRegisterDevice, list, ref info))
-                    throw new Win32Exception();
-            }
-            finally
-            {
-                SetupDiDestroyDeviceInfoList(list);
-            }
-        }
-
-        if (!UpdateDriverForPlugAndPlayDevicesW(IntPtr.Zero, HardwareId, Path.GetFullPath(infPath), InstallFlagForce, out _))
-            throw new Win32Exception();
+        RootDevice.Install(DisplayClass, "Display", HardwareId, infPath);
     }
 
     /// <summary>Removes the device; the driver package stays in the driver store (harmless, reused on reinstall).</summary>
-    public static void Uninstall()
-    {
-        var classGuid = DisplayClass;
-        var list = SetupDiGetClassDevsW(ref classGuid, null, IntPtr.Zero, 0);
-        if (list == InvalidHandle)
-            throw new Win32Exception();
-        try
-        {
-            foreach (var info in Enumerate(list).Where(i => HasHardwareId(list, i)).ToList())
-            {
-                var device = info;
-                if (!DiUninstallDevice(IntPtr.Zero, list, ref device, 0, out _))
-                    throw new Win32Exception();
-            }
-        }
-        finally
-        {
-            SetupDiDestroyDeviceInfoList(list);
-        }
-    }
+    public static void Uninstall() => RootDevice.Remove(DisplayClass, HardwareId);
 
     /// <summary>The settings folder, open to all users, and the driver pointed at it.</summary>
     private static void PrepareSettings(string initialSettingsXml)
@@ -102,88 +58,4 @@ public static class DriverInstaller
         using var key = Registry.LocalMachine.CreateSubKey(SettingsKey);
         key.SetValue("VDDPATH", SettingsFolder, RegistryValueKind.String);
     }
-
-    private static List<string> FindDevices()
-    {
-        var classGuid = DisplayClass;
-        var list = SetupDiGetClassDevsW(ref classGuid, null, IntPtr.Zero, 0);
-        if (list == InvalidHandle)
-            return [];
-        try
-        {
-            return Enumerate(list).Where(i => HasHardwareId(list, i)).Select(_ => HardwareId).ToList();
-        }
-        finally
-        {
-            SetupDiDestroyDeviceInfoList(list);
-        }
-    }
-
-    private static IEnumerable<SpDevinfoData> Enumerate(IntPtr list)
-    {
-        for (uint i = 0; ; i++)
-        {
-            var info = new SpDevinfoData { Size = Marshal.SizeOf<SpDevinfoData>() };
-            if (!SetupDiEnumDeviceInfo(list, i, ref info))
-                yield break;
-            yield return info;
-        }
-    }
-
-    private static bool HasHardwareId(IntPtr list, SpDevinfoData info)
-    {
-        var buffer = new byte[2048];
-        if (!SetupDiGetDeviceRegistryPropertyW(list, ref info, SpdrpHardwareId, out _, buffer, buffer.Length, out var size))
-            return false;
-        var ids = System.Text.Encoding.Unicode.GetString(buffer, 0, Math.Max(0, size)).Split('\0', StringSplitOptions.RemoveEmptyEntries);
-        return ids.Any(id => id.Equals(HardwareId, StringComparison.OrdinalIgnoreCase));
-    }
-
-    // ---- SetupAPI ----
-
-    private static readonly Guid DisplayClass = new("4d36e968-e325-11ce-bfc1-08002be10318");
-    private static readonly IntPtr InvalidHandle = new(-1);
-    private const uint DicdGenerateId = 1;
-    private const uint SpdrpHardwareId = 1;
-    private const uint DifRegisterDevice = 0x19;
-    private const uint InstallFlagForce = 1;
-
-    [StructLayout(LayoutKind.Sequential)]
-    private struct SpDevinfoData
-    {
-        public int Size;
-        public Guid ClassGuid;
-        public uint DevInst;
-        public IntPtr Reserved;
-    }
-
-    [DllImport("setupapi.dll", SetLastError = true)]
-    private static extern IntPtr SetupDiCreateDeviceInfoList(ref Guid classGuid, IntPtr parent);
-
-    [DllImport("setupapi.dll", SetLastError = true, CharSet = CharSet.Unicode)]
-    private static extern IntPtr SetupDiGetClassDevsW(ref Guid classGuid, string? enumerator, IntPtr parent, uint flags);
-
-    [DllImport("setupapi.dll", SetLastError = true, CharSet = CharSet.Unicode)]
-    private static extern bool SetupDiCreateDeviceInfoW(IntPtr list, string name, ref Guid classGuid, string? description, IntPtr parent, uint flags, ref SpDevinfoData info);
-
-    [DllImport("setupapi.dll", SetLastError = true)]
-    private static extern bool SetupDiSetDeviceRegistryPropertyW(IntPtr list, ref SpDevinfoData info, uint property, byte[] buffer, int size);
-
-    [DllImport("setupapi.dll", SetLastError = true)]
-    private static extern bool SetupDiGetDeviceRegistryPropertyW(IntPtr list, ref SpDevinfoData info, uint property, out uint type, byte[] buffer, int size, out int required);
-
-    [DllImport("setupapi.dll", SetLastError = true)]
-    private static extern bool SetupDiCallClassInstaller(uint function, IntPtr list, ref SpDevinfoData info);
-
-    [DllImport("setupapi.dll", SetLastError = true)]
-    private static extern bool SetupDiEnumDeviceInfo(IntPtr list, uint index, ref SpDevinfoData info);
-
-    [DllImport("setupapi.dll", SetLastError = true)]
-    private static extern bool SetupDiDestroyDeviceInfoList(IntPtr list);
-
-    [DllImport("newdev.dll", SetLastError = true, CharSet = CharSet.Unicode)]
-    private static extern bool UpdateDriverForPlugAndPlayDevicesW(IntPtr parent, string hardwareId, string infPath, uint flags, out bool reboot);
-
-    [DllImport("newdev.dll", SetLastError = true)]
-    private static extern bool DiUninstallDevice(IntPtr parent, IntPtr list, ref SpDevinfoData info, uint flags, out bool reboot);
 }

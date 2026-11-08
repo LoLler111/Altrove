@@ -419,13 +419,16 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
         }
     }
 
-    /// <summary>The first time: explain, download the pinned usbip-win2 and install it (Windows asks for permission).</summary>
+    /// <summary>
+    /// The first time: explain, then install the bundled usbip-win2 drivers through an elevated copy of Altrove
+    /// (Windows asks for permission). Nothing is downloaded.
+    /// </summary>
     private async Task InstallMicAsync()
     {
         var answer = MessageBox.Show(
             "Per usare il microfono del tablet nelle app del PC (Teams, Discord, Zoom…) Altrove crea un «Microfono Altrove». " +
-            "Gli serve usbip-win2, un componente open source con driver firmati da Microsoft (circa 26 MB, da GitHub).\n\n" +
-            "Windows chiederà il permesso di amministratore. Procedo?",
+            "Gli servono i driver di usbip-win2, un componente open source firmato da Microsoft, già compreso in Altrove.\n\n" +
+            "Durante l'installazione le porte USB 3 si fermano per un attimo. Windows chiederà il permesso di amministratore. Procedo?",
             "Altrove – microfono", MessageBoxButton.YesNo, MessageBoxImage.Question);
         if (answer != MessageBoxResult.Yes)
         {
@@ -435,23 +438,31 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
         var previous = Status;
         try
         {
-            Status = "Scarico usbip-win2…";
-            var installer = await UsbIpSetup.DownloadInstallerAsync(CancellationToken.None);
-            Status = "Installo usbip-win2…";
-            var restart = await UsbIpSetup.InstallAsync(installer);
+            Status = "Installo il microfono…";
+            using var process = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(Environment.ProcessPath!, App.InstallMicArgument)
+            {
+                Verb = "runas",
+                UseShellExecute = true,
+            })!;
+            await process.WaitForExitAsync();
             Status = previous;
-            if (restart)
-                MessageBox.Show("usbip-win2 è installato. Riavvia Windows prima di usare il microfono.", "Altrove – microfono");
+            if ((process.ExitCode != 0 && process.ExitCode != App.ExitRestartNeeded) || !UsbIpSetup.IsInstalled)
+            {
+                UseTabletMic = false;
+                ShowError("L'installazione del microfono non è riuscita.");
+                return;
+            }
+            if (process.ExitCode == App.ExitRestartNeeded)
+                MessageBox.Show("Il microfono è installato. Riavvia Windows prima di usarlo.", "Altrove – microfono");
             ApplyMic();
             if (_session is { } session && State == SessionState.Streaming)
                 session.SendSettings(CurrentSettings(null));
         }
-        catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException or System.Net.Http.HttpRequestException or TaskCanceledException or System.IO.IOException)
+        catch (System.ComponentModel.Win32Exception)
         {
+            Status = previous;
             UseTabletMic = false;
-            ShowError(ex is System.ComponentModel.Win32Exception
-                ? "Installazione annullata: senza il permesso di Windows il microfono del tablet non è disponibile."
-                : $"Il microfono del tablet non è disponibile: {ex.Message}");
+            ShowError("Installazione annullata: senza il permesso di Windows il microfono del tablet non è disponibile.");
         }
     }
 
@@ -515,7 +526,12 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
     private void Merge(IReadOnlyList<DiscoveredReceiver> found)
     {
         var ids = found.Select(f => f.Id).ToHashSet();
-        foreach (var gone in Receivers.Where(r => !r.IsManual && !ids.Contains(r.Id) && r != SelectedReceiver).ToList())
+        // The selected one stays while it is away, unless the same device is listed again under another id
+        // (first seen by address alone, then with its own id): then the selection moves to that entry.
+        var moved = SelectedReceiver is { IsManual: false } selected && !ids.Contains(selected.Id)
+            ? found.FirstOrDefault(f => f.Host == selected.Host && f.Port == selected.Port)
+            : null;
+        foreach (var gone in Receivers.Where(r => !r.IsManual && !ids.Contains(r.Id) && (r != SelectedReceiver || moved is not null)).ToList())
             Receivers.Remove(gone);
         foreach (var item in Receivers.Where(r => !r.IsManual))
             item.IsOnline = ids.Contains(item.Id);
@@ -525,6 +541,8 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
             if (existing is not null && existing.Host == receiver.Host && existing.Port == receiver.Port)
             {
                 existing.Name = receiver.Name;
+                if (receiver == moved)
+                    SelectedReceiver = existing;
                 continue;
             }
             var index = existing is null ? Receivers.Count(r => !r.IsManual) : Receivers.IndexOf(existing);
@@ -538,7 +556,7 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
             }
             else
                 Receivers.Insert(index, item);
-            if (SelectedReceiver is null && receiver.Id == _settings.LastReceiverId)
+            if (receiver == moved || (SelectedReceiver is null && receiver.Id == _settings.LastReceiverId))
                 SelectedReceiver = item;
         }
         OnPropertyChanged(nameof(HasReceivers));
@@ -957,6 +975,10 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
     /// <summary>The receiver asked for other settings: apply them to the running stream, or put the old ones back.</summary>
     private async Task ConfigureAsync(ConfigureMessage request)
     {
+        // A receiver may ask as soon as the first settings reach it, while sound and microphone are still starting:
+        // wait for the stream instead of dropping the request (the receiver would wait for an answer that never comes).
+        for (var i = 0; i < 100 && State is SessionState.Connecting or SessionState.Reconnecting && _session is not null; i++)
+            await Task.Delay(100);
         await _reconfiguring.WaitAsync();
         try
         {

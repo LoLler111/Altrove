@@ -98,7 +98,8 @@ fun SettingsPanel(
                 Section("TV «$name»")
                 Chips(listOf(true, false), useTv, true, { if (it) "Sulla TV" else "Su questo schermo" }, receiver::setUseTv)
                 Note(
-                    if (useTv) "Il PC è a tutto schermo sulla TV; qui restano pannello, tocco e trackpad."
+                    if (useTv) "Il PC è a tutto schermo sulla TV; qui restano pannello, tocco e trackpad. " +
+                        "La proiezione verso la TV arriva al massimo a 30 fps: il PC ne manda 30 finché il video è sulla TV."
                     else "La TV mostra lo stesso schermo di questo dispositivo.",
                 )
             } else {

@@ -1,31 +1,56 @@
 // Adapted from celmic (MIT, Celmic contributors): see third_party/celmic/NOTICE.md.
 using System.ComponentModel;
 using System.Diagnostics;
-using System.Net.Http;
-using System.Security.Cryptography;
+using Altrove.Capture.Native;
 
 namespace Altrove.Capture.Microphone;
 
 /// <summary>
-/// usbip-win2 (BSD-2-Clause, drivers signed by Microsoft): found if installed, installed on request (one
-/// administrator prompt), and asked to attach Altrove's microphone. The installer is a pinned release, checked
-/// against its SHA-256 before it runs.
+/// usbip-win2 0.9.8.1 (drivers signed by Microsoft): the part Altrove needs ships next to the apps
+/// (third_party/usbip-win2: the two driver packages and usbip.exe), so nothing is downloaded. Installed on request
+/// (one administrator prompt) the way its own installer does it, and asked to attach Altrove's microphone.
 /// </summary>
 public static class UsbIpSetup
 {
     public const string Version = "0.9.8.1";
-    private const string InstallerUrl = "https://github.com/vadimgrn/usbip-win2/releases/download/v.0.9.8.1/USBip-0.9.8.1-x64.exe";
-    private const string InstallerSha256 = "38cad6d4432b52d5bb9409d9ad03b72fdffc4ada4cd3a48fbeca1a2752a8518a";
-    private const int ExitReboot = 3010; // Inno Setup's code when Windows must restart
 
-    /// <summary>usbip.exe of an installed usbip-win2, or null.</summary>
+    /// <summary>The emulated USB host controller: a root device with this id, driver usbip2_ude.</summary>
+    public const string HardwareId = @"ROOT\USBIP_WIN2\UDE";
+
+    private static readonly Guid UsbClass = new("36fc9e60-c465-11cf-8056-444553540000");
+
+    /// <summary>Where the bundled files are, next to Altrove.exe (and altrove-cli.exe).</summary>
+    public static string BundledFolder => Path.Combine(AppContext.BaseDirectory, "usbip-win2");
+
+    /// <summary>
+    /// usbip.exe to talk to the driver with, or null. A full usbip-win2 installed by its own setup wins: its tool
+    /// matches the driver it installed, which may be another version than ours.
+    /// </summary>
     public static string? UsbipExe()
     {
         var programFiles = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles);
-        return new[] { "USBip", "usbip-win2" }.Select(dir => Path.Combine(programFiles, dir, "usbip.exe")).FirstOrDefault(File.Exists);
+        return new[] { Path.Combine(programFiles, "USBip"), Path.Combine(programFiles, "usbip-win2"), BundledFolder }
+            .Select(dir => Path.Combine(dir, "usbip.exe"))
+            .FirstOrDefault(File.Exists);
     }
 
-    public static bool IsInstalled => UsbipExe() is not null;
+    /// <summary>True when the driver is in Windows (from Altrove or from usbip-win2's setup) and usbip.exe is at hand.</summary>
+    public static bool IsInstalled => RootDevice.Exists(UsbClass, HardwareId) && UsbipExe() is not null;
+
+    /// <summary>
+    /// Installs the drivers from the bundled folder; needs administrator rights. First the filter for the USB 3
+    /// root hubs (Windows restarts every USB 3 hub for a moment), then the emulated host controller, whose root hub
+    /// then gets the filter. True if Windows wants a restart.
+    /// </summary>
+    public static bool Install()
+    {
+        var restart = RootDevice.InstallPackage(Path.Combine(BundledFolder, "usbip2_filter.inf"));
+        restart |= RootDevice.Install(UsbClass, "USB", HardwareId, Path.Combine(BundledFolder, "usbip2_ude.inf"));
+        return restart;
+    }
+
+    /// <summary>Removes the emulated host controller (the microphone goes with it); needs administrator rights.</summary>
+    public static void Uninstall() => RootDevice.Remove(UsbClass, HardwareId);
 
     private static string Target => $"usbip://127.0.0.1:{UsbIpMicServer.TcpPort}/{UsbIpMicServer.BusId}";
 
@@ -63,37 +88,6 @@ public static class UsbIpSetup
             if (digits.Length > 0)
                 Run(usbip, $"detach -p {int.Parse(digits)}");
         }
-    }
-
-    /// <summary>Downloads the pinned installer into the temp folder and checks it. Throws if anything is off.</summary>
-    public static async Task<string> DownloadInstallerAsync(CancellationToken token)
-    {
-        var file = Path.Combine(Path.GetTempPath(), "Altrove", Path.GetFileName(new Uri(InstallerUrl).LocalPath));
-        Directory.CreateDirectory(Path.GetDirectoryName(file)!);
-        using var http = new HttpClient { Timeout = TimeSpan.FromMinutes(3) };
-        http.DefaultRequestHeaders.UserAgent.ParseAdd("Altrove");
-        var data = await http.GetByteArrayAsync(InstallerUrl, token);
-        if (!Convert.ToHexString(SHA256.HashData(data)).Equals(InstallerSha256, StringComparison.OrdinalIgnoreCase))
-            throw new InvalidOperationException("L'installatore di usbip-win2 scaricato non corrisponde a quello atteso: non lo avvio.");
-        await File.WriteAllBytesAsync(file, data, token);
-        return file;
-    }
-
-    /// <summary>Runs the installer as administrator (Windows asks once). True if Windows wants a restart.</summary>
-    public static async Task<bool> InstallAsync(string installer)
-    {
-        using var process = Process.Start(new ProcessStartInfo(installer, $"/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /RESTARTEXITCODE={ExitReboot}")
-        {
-            Verb = "runas",
-            UseShellExecute = true,
-        }) ?? throw new InvalidOperationException("L'installatore di usbip-win2 non è partito.");
-        await process.WaitForExitAsync();
-        return process.ExitCode switch
-        {
-            0 => false,
-            ExitReboot => true,
-            var code => throw new InvalidOperationException($"L'installazione di usbip-win2 non è riuscita (codice {code})."),
-        };
     }
 
     private static (int Code, string Output) Run(string exe, string arguments)

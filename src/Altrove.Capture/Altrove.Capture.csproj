@@ -23,4 +23,9 @@
     <None Include="..\..\third_party\VirtualDisplayDriver\*" Link="VirtualDisplayDriver\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" Visible="false" />
   </ItemGroup>
 
+  <!-- The part of usbip-win2 the tablet's microphone needs (signed drivers and usbip.exe), installed on first use. -->
+  <ItemGroup>
+    <None Include="..\..\third_party\usbip-win2\*" Link="usbip-win2\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" Visible="false" />
+  </ItemGroup>
+
 </Project>
